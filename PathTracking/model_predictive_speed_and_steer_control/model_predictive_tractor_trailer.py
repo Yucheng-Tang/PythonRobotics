@@ -1,9 +1,12 @@
 """
 
-Path tracking simulation with iterative linear model predictive control for speed and steer control
+Path tracking simulation with iterative linear model predictive control
 
-author: Atsushi Sakai (@Atsushi_twi)
+Robot model: differential driven mobile robot with passive trailer
 
+author: Yucheng Tang (@Yucheng-Tang)
+
+Citation: Atsushi Sakai (@Atsushi_twi)
 """
 import matplotlib.pyplot as plt
 import cvxpy
@@ -99,29 +102,28 @@ def pi_2_pi(angle):
 
 
 def get_linear_model_matrix(xref_t, xref_t1, x_t):
-    dyawt = (xref_t1[3]-xref_t[3])
-    # TODO: its not the velocity theta2 at operation point!!!
+    # dyawt = (xref_t1[3]-xref_t[3])
+    # dyawt is not the velocity theta2 at operation point!!!
     rp_t = np.array([xref_t[0], xref_t[1]])
     rp_t1 = np.array([xref_t1[0], xref_t1[1]])
     v_r = np.linalg.norm(rp_t1 - rp_t)
     w_r = xref_t1[2] - xref_t[2]
-    # print("ref t: ", rp_t, "ref t+1: ", rp_t1, "reference velocity:", v_r)
-    # TODO: velocity = distance / DT?
+    # velocity = distance / DT
 
     A = np.zeros((NX, NX))
-    # A[0, 0] = 1.0
-    # A[1, 1] = 1.0
-    # A[2, 2] = 1.0
-    # A[3, 3] = 1.0
-    # A[0, 2] = DT * math.cos(phi)
-    # A[0, 3] = - DT * v * math.sin(phi)
-    # A[1, 2] = DT * math.sin(phi)
-    # A[1, 3] = DT * v * math.cos(phi)
-    # A[3, 2] = DT * math.tan(delta) / WB
     A[0, 0] = 1.0
     A[1, 1] = 1.0
     A[2, 2] = 1.0
     # A[3, 3] = 1.0
+
+    # model from pythonrobotic
+    A[0, 2] = v_r * math.sin(x_t[3] - x_t[2]) * math.cos(x_t[3])
+    A[0, 3] = - v_r * math.sin(2 * x_t[3] - x_t[2])
+    A[1, 2] = v_r * math.sin(x_t[3] - x_t[2]) * math.sin(x_t[3])
+    A[1, 3] = v_r * math.cos(2 * x_t[3] - x_t[2])
+    A[3, 2] = (v_r * math.cos(x_t[3] - x_t[2]) - CP_OFFSET * w_r * math.sin(x_t[3] - x_t[2])) / ROD_LEN
+    A[3, 3] = 1.0 - (v_r * math.cos(x_t[3] - x_t[2]) - CP_OFFSET * w_r * math.sin(x_t[3] - x_t[2])) / ROD_LEN
+
     # my model
     # A[0, 1] = DT * dyawt
     # A[1, 0] = - DT * dyawt
@@ -130,18 +132,15 @@ def get_linear_model_matrix(xref_t, xref_t1, x_t):
     # A[0, 1] = dyawt
     # A[1, 0] = - dyawt
     # A[1, 3] = v_r * math.cos(xref_t[2] - xref_t[3])
-    # model from pythonrobotic
-    A[0, 2] = v_r * math.sin(x_t[3] - x_t[2]) * math.cos(x_t[3])
-    A[0, 3] = - v_r * math.sin(2 * x_t[3] - x_t[2])
-    A[1, 2] = v_r * math.sin(x_t[3] - x_t[2]) * math.sin(x_t[3])
-    A[1, 3] = v_r * math.cos(2 * x_t[3] - x_t[2])
-    A[3, 2] = (v_r * math.cos(x_t[3] - x_t[2])  - CP_OFFSET * w_r * math.sin(x_t[3] - x_t[2])) / ROD_LEN
-    A[3, 3] = 1.0 - (v_r * math.cos(x_t[3] - x_t[2]) - CP_OFFSET * w_r * math.sin(x_t[3] - x_t[2])) / ROD_LEN
-
 
     B = np.zeros((NX, NU))
-    # B[2, 0] = DT
-    # B[3, 1] = DT * v / (WB * math.cos(delta) ** 2)
+
+    # model from pythonrobotics
+    B[0, 0] = DT * math.cos(x_t[3] - x_t[2]) * math.cos(x_t[3])
+    B[1, 0] = DT * math.cos(x_t[3] - x_t[2]) * math.sin(x_t[3])
+    B[2, 1] = DT
+    B[3, 0] = - DT * math.sin(x_t[3] - x_t[2]) / ROD_LEN
+    B[3, 1] = - DT * CP_OFFSET * math.cos(x_t[3] - x_t[2]) / ROD_LEN
 
     # my model
     # B[0, 0] = DT * math.cos(x_t[3] - x_t[2])
@@ -154,17 +153,12 @@ def get_linear_model_matrix(xref_t, xref_t1, x_t):
     # B[3, 0] = DT * math.sin(x_t[2] - x_t[3]) / ROD_LEN
     # print("B", B[0, 0], B[3, 0])
 
-    # model from pythonrobotics
-    B[0, 0] = DT * math.cos(x_t[3] - x_t[2]) * math.cos(x_t[3])
-    B[1, 0] = DT * math.cos(x_t[3] - x_t[2]) * math.sin(x_t[3])
-    B[2, 1] = DT
-    B[3, 0] = - DT * math.sin(x_t[3] - x_t[2]) / ROD_LEN
-    B[3, 1] = - DT * CP_OFFSET * math.cos(x_t[3] - x_t[2]) / ROD_LEN
-
     C = np.zeros(NX)
-    # C[0] = DT * v * math.sin(phi) * phi
-    # C[1] = - DT * v * math.cos(phi) * phi
-    # C[3] = - DT * v * delta / (WB * math.cos(delta) ** 2)
+
+    # model from pythonrobotics
+    C[0] = - v_r * (x_t[2] * math.sin(x_t[3] - x_t[2]) * math.cos(x_t[3]) - x_t[3] * math.sin(2 * x_t[3] - x_t[2]))
+    C[1] = - v_r * (x_t[2] * math.sin(x_t[3] - x_t[2]) * math.sin(x_t[3]) + x_t[3] * math.cos(2 * x_t[3] - x_t[2]))
+    C[3] = (x_t[3] - x_t[2]) * (v_r * math.cos(x_t[3] - x_t[2]) - CP_OFFSET * w_r * math.sin(x_t[3] - x_t[2])) / ROD_LEN
 
     # my model
     # C[0] = DT * v_r * math.cos(xref_t[3] - xref_t[2])
@@ -176,11 +170,6 @@ def get_linear_model_matrix(xref_t, xref_t1, x_t):
     # C[2] = (xref_t1[2] - xref_t[2])
     # C[3] = (xref_t1[3] - xref_t[3])
     # print("C", C[2], C[3])
-
-    # model from pythonrobotics
-    C[0] = - v_r * (x_t[2] * math.sin(x_t[3] - x_t[2]) * math.cos(x_t[3]) - x_t[3] * math.sin(2 * x_t[3] - x_t[2]))
-    C[1] = - v_r * (x_t[2] * math.sin(x_t[3] - x_t[2]) * math.sin(x_t[3]) + x_t[3] * math.cos(2 * x_t[3] - x_t[2]))
-    C[3] = (x_t[3] - x_t[2]) * (v_r * math.cos(x_t[3] - x_t[2]) - CP_OFFSET * w_r * math.sin(x_t[3] - x_t[2])) / ROD_LEN
 
     return A, B, C
 
@@ -256,7 +245,7 @@ def update_state(state, v, dyaw):
     # state.y = state.y + v * math.cos(state.yawt - state.yaw) * math.sin(state.yawt) * DT
     # state.yaw = state.yaw + dyaw * DT
     # state.yawt = state.yawt - v / ROD_LEN * math.sin(state.yawt - state.yaw) * DT
-    #
+
     # model from paper
     state_new = State(x=state.x, y=state.y, yaw=state.yaw, yawt=state.yawt)
 
@@ -265,43 +254,13 @@ def update_state(state, v, dyaw):
     state_new.yaw = state.yaw + dyaw * DT
     state_new.yawt = state.yawt + v / ROD_LEN * math.sin(state.yaw - state.yawt) * DT \
                     - CP_OFFSET * dyaw * math.cos(state.yaw - state.yawt) / ROD_LEN
-    # state.v = state.v + a * DT
 
     # state.x = state.x + v * math.cos(state.yaw - state.yawt) * math.cos(state.yawt) * DT
     # state.y = state.y + v * math.cos(state.yaw - state.yawt) * math.sin(state.yawt) * DT
     # state.yaw = state.yaw + dyaw * DT
     # state.yawt = state.yawt + v / ROD_LEN * math.sin(state.yaw - state.yawt) * DT
 
-    # print("cos phi * cos yawt ", math.cos(state.yawt - state.yaw), math.cos(state.yawt), math.cos(state.yawt - state.yaw) * math.cos(state.yawt) * v * DT)
-    # print("(x,y) after update ",
-    # state.x, state.y)
-
-    # if state.v > MAX_SPEED:
-    #     state.v = MAX_SPEED
-    # elif state.v < MIN_SPEED:
-    #     state.v = MIN_SPEED
-
     return state_new
-
-# def update_state(state, a, delta):
-#
-#     # input check
-#     if delta >= MAX_STEER:
-#         delta = MAX_STEER
-#     elif delta <= -MAX_STEER:
-#         delta = -MAX_STEER
-#
-#     state.x = state.x + state.v * math.cos(state.yaw) * DT
-#     state.y = state.y + state.v * math.sin(state.yaw) * DT
-#     state.yaw = state.yaw + state.v / WB * math.tan(delta) * DT
-#     state.v = state.v + a * DT
-#
-#     if state.v > MAX_SPEED:
-#         state.v = MAX_SPEED
-#     elif state.v < MIN_SPEED:
-#         state.v = MIN_SPEED
-#
-#     return state
 
 
 def get_nparray_from_matrix(x):
@@ -413,8 +372,6 @@ def linear_mpc_control(xref, xbar, x0):
     constraints += [cvxpy.abs(u[0, :]) <= MAX_SPEED]
     constraints += [cvxpy.abs(u[1, :]) <= MAX_OMEGA]
 
-
-
     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
     prob.solve(solver=cvxpy.ECOS, verbose=False)
 
@@ -449,23 +406,9 @@ def calc_ref_trajectory(state, cx, cy, cyaw, cyawt, ck, sp, dl, pind):
     #TODO: if the pose of tractor could be calculate in this case, when yes, define the function cal_tractor_pose
     xref[2, 0] = cyaw[ind] # cal_tractor_pose(cyawt[ind])
     xref[3, 0] = cyawt[ind]
-    # TODO: What is the meaning of dref, if it's useful in our case？
-    # dref[0, 0] = 0.0  # steer operational point should be 0
-
-    # TODO: if v is control input, travel doesn't make sense anymore?
-    # travel = 0.0
 
     for i in range(T + 1):
-        # travel += abs(state.v) * DT
-        # dind = int(round(travel / dl))
-
-        # if (ind + dind) < ncourse:
-        #     xref[0, i] = cx[ind + dind]
-        #     xref[1, i] = cy[ind + dind]
-        #     # xref[2, i] = sp[ind + dind]
-        #     xref[2, i] = cyaw[ind + dind] # cal_tractor_pose(cyawt[ind + dind])
-        #     xref[3, i] = cyawt[ind + dind]
-        #     # dref[0, i] = 0.0
+        # TODO: what will happen when v is not state variable and should be negative?
         if (ind + i) < ncourse:
             xref[0, i] = cx[ind + i]
             xref[1, i] = cy[ind + i]
@@ -478,10 +421,8 @@ def calc_ref_trajectory(state, cx, cy, cyaw, cyawt, ck, sp, dl, pind):
             # TODO: traget yaw position should be pre-defined!!!
             xref[2, i] = cyaw[ncourse - 1] # cal_tractor_pose(cyawt[ncourse - 1])
             xref[3, i] = cyawt[ncourse - 1]
-            # dref[0, i] = 0.0
 
     return xref, ind
-    #, dref
 
 
 def check_goal(state, goal, tind, nind):
@@ -496,9 +437,7 @@ def check_goal(state, goal, tind, nind):
     if abs(tind - nind) >= 5:
         isgoal = False
 
-    # isstop = (abs(state.v) <= STOP_SPEED)
-
-    if isgoal: # and isstop:
+    if isgoal:
         return True
 
     return False
@@ -532,7 +471,6 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
     y = [state.y]
     yaw = [state.yaw]
     yawt = [state.yawt]
-    # v = [state.v]
     t = [0.0]
     dyaw = [0.0]
     v = [0.0]
@@ -545,19 +483,15 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
     # txm_list = [state.x-np.cos(state.yaw)]
     # tym_list = [state.y-np.sin(state.yaw)]
 
-    # odelta, oa = None, None
     ov, odyaw = None, None
 
     #TODO: check the function smooth_yaw
     cyawt = smooth_yaw(cyawt)
 
     while MAX_TIME >= time:
-        # xref, target_ind, dref = calc_ref_trajectory(
-        #     state, cx, cy, cyaw, ck, sp, dl, target_ind)
         xref, target_ind = calc_ref_trajectory(
             state, cx, cy, cyaw, cyawt, ck, sp, dl, target_ind)
         print(target_ind)
-        # if target_ind == 0:
         # target_ind += 1
 
         x0 = [state.x, state.y, state.yaw, state.yawt]  # current state
@@ -575,10 +509,7 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
         y.append(state.y)
         yaw.append(state.yaw)
         yawt.append(state.yawt)
-        # v.append(state.v)
         t.append(time)
-        # d.append(di)
-        # a.append(ai)
         dyaw.append(dyawi)
         v.append(vi)
 
@@ -586,19 +517,20 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
             phi_tractrix = 1
             phi_model = 0
         # dyaw = yaw[-1] - yaw[-2]
+        # TODO: Tractrix curve for kinematic model?
 
         if check_goal(state, goal, target_ind, len(cx)):
             print("Goal")
             break
 
-        print("ov, odyaw", ov, odyaw)
-        print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
-        print("ref", xref[0, :], xref[1, :], xref[2, :])
-
-        print("state trailer: ", state.x, state.y, state.yawt,
-              "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
-              "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
-              state.yaw, "control input", dyawi, vi)
+        # print("ov, odyaw", ov, odyaw)
+        # print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
+        # print("ref", xref[0, :], xref[1, :], xref[2, :])
+        #
+        # print("state trailer: ", state.x, state.y, state.yawt,
+        #       "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
+        #       "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
+        #       state.yaw, "control input", dyawi, vi)
 
         if show_animation:  # pragma: no cover
             plt.cla()
