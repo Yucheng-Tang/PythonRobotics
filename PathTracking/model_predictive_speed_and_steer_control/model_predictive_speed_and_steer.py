@@ -1,9 +1,6 @@
 """
-
 Path tracking simulation with iterative linear model predictive control for speed and steer control
-
 author: Atsushi Sakai (@Atsushi_twi)
-
 """
 import matplotlib.pyplot as plt
 import cvxpy
@@ -254,7 +251,6 @@ def iterative_linear_mpc_control(xref, x0, dref, oa, od):
 def linear_mpc_control(xref, xbar, x0, dref):
     """
     linear mpc control
-
     xref: reference point
     xbar: operational point
     x0: initial state
@@ -273,6 +269,7 @@ def linear_mpc_control(xref, xbar, x0, dref):
         if t != 0:
             cost += cvxpy.quad_form(xref[:, t] - x[:, t], Q)
 
+        print(dref)
         A, B, C = get_linear_model_matrix(
             xbar[2, t], xbar[3, t], dref[0, t])
         constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
@@ -369,14 +366,12 @@ def check_goal(state, goal, tind, nind):
 def do_simulation(cx, cy, cyaw, ck, sp, dl, initial_state):
     """
     Simulation
-
     cx: course x position list
     cy: course y position list
     cy: course yaw position list
     ck: course curvature list
     sp: speed profile
     dl: course tick [m]
-
     """
 
     goal = [cx[-1], cy[-1]]
@@ -557,12 +552,15 @@ def main():
 
     dl = 1.0  # course tick
     # cx, cy, cyaw, ck = get_straight_course(dl)
-    # cx, cy, cyaw, ck = get_straight_course2(dl)
+    cx, cy, cyaw, ck = get_straight_course2(dl)
     # cx, cy, cyaw, ck = get_straight_course3(dl)
     # cx, cy, cyaw, ck = get_forward_course(dl)
-    cx, cy, cyaw, ck = get_switch_back_course(dl)
+    # cx, cy, cyaw, ck = get_switch_back_course(dl)
+    print(cyaw)
 
     sp = calc_speed_profile(cx, cy, cyaw, TARGET_SPEED)
+
+    print(sp)
 
     initial_state = State(x=cx[0], y=cy[0], yaw=cyaw[0], v=0.0)
 
