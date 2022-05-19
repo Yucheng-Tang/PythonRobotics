@@ -1,7 +1,7 @@
 import numpy as np
 
 import conftest
-from PathPlanning.DubinsPath import dubins_path_planning
+from PathPlanning.DubinsPath import dubins_path_planner
 
 np.random.seed(12345)
 
@@ -33,7 +33,7 @@ def test_1():
 
     curvature = 1.0
 
-    px, py, pyaw, mode, lengths = dubins_path_planning.dubins_path_planning(
+    px, py, pyaw, mode, lengths = dubins_path_planner.plan_dubins_path(
         start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature)
 
     check_edge_condition(px, py, pyaw, start_x, start_y, start_yaw, end_x,
@@ -42,8 +42,8 @@ def test_1():
 
 
 def test_2():
-    dubins_path_planning.show_animation = False
-    dubins_path_planning.main()
+    dubins_path_planner.show_animation = False
+    dubins_path_planner.main()
 
 
 def test_3():
@@ -61,12 +61,31 @@ def test_3():
         curvature = 1.0 / (np.random.rand() * 5.0)
 
         px, py, pyaw, mode, lengths = \
-            dubins_path_planning.dubins_path_planning(
-            start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature)
+            dubins_path_planner.plan_dubins_path(
+                start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature)
 
         check_edge_condition(px, py, pyaw, start_x, start_y, start_yaw, end_x,
                              end_y, end_yaw)
         check_path_length(px, py, lengths)
+
+
+def test_path_plannings_types():
+    dubins_path_planner.show_animation = False
+    start_x = 1.0  # [m]
+    start_y = 1.0  # [m]
+    start_yaw = np.deg2rad(45.0)  # [rad]
+
+    end_x = -3.0  # [m]
+    end_y = -3.0  # [m]
+    end_yaw = np.deg2rad(-45.0)  # [rad]
+
+    curvature = 1.0
+
+    _, _, _, mode, _ = dubins_path_planner.plan_dubins_path(
+        start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature,
+        selected_types=["RSL"])
+
+    assert mode == ["R", "S", "L"]
 
 
 if __name__ == '__main__':

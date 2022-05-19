@@ -13,8 +13,8 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
+import sys
+sys.path.insert(0, os.path.abspath('../'))
 
 
 # -- Project information -----------------------------------------------------
@@ -39,9 +39,11 @@ release = ''
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    'matplotlib.sphinxext.plot_directive',
     'sphinx.ext.autodoc',
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
+    'sphinx.ext.napoleon',
     'IPython.sphinxext.ipython_console_highlighting',
 ]
 
@@ -92,6 +94,17 @@ else:
 html_logo = '../icon.png'
 html_theme_options = {
     'display_version': False,
+}
+
+# replace "view page source" with "edit on github" in Read The Docs theme
+#  * https://github.com/readthedocs/sphinx_rtd_theme/issues/529
+html_context = {
+    'display_github': True,
+    'github_user': 'AtsushiSakai',
+    'github_repo': 'PythonRobotics',
+    'github_version': 'master',
+    "conf_py_path": "/docs/",
+    "source_suffix": source_suffix,
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
