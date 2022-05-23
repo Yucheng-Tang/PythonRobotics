@@ -36,15 +36,15 @@ T = 10 # horizon length
 # mpc parameters
 R = np.diag([0.01, 0.01])  # input cost matrix
 Rd = np.diag([5.0, 5.0]) # ([0.01, 1.0])  # input difference cost matrix
-Q = np.diag([1.0, 1.0, 0.01, 10.0])  # state cost matrix
+Q = np.diag([1.0, 1.0, 0.01, 1.0])  # state cost matrix
 Qf = Q  # state final matrix
 GOAL_DIS = 1.5  # goal distance
 STOP_SPEED = 0.5 / 3.6  # stop speed
 MAX_TIME = 500.0  # max simulation time
 
 # iterative paramter
-MAX_ITER = 3  # Max iteration
-DU_TH = 20 # 0.1  # iteration finish param
+MAX_ITER = 5  # Max iteration
+DU_TH = 0.1 # 0.1  # iteration finish param
 
 TARGET_SPEED = 10.0 / 3.6  # [m/s] target speed
 N_IND_SEARCH = 10  # Search index number
@@ -75,6 +75,7 @@ show_animation = True
 
 # TODO: add control horizon variable
 # TODO: Notebook and Git
+# TODO: cannot converge to the goal pose
 
 class State:
     """
@@ -320,6 +321,7 @@ def iterative_linear_mpc_control(xref, x0, ov, odyaw):
         pov, podyaw = ov[:], odyaw[:]
         ov, odyaw, ox, oy, oyaw, oyawt = linear_mpc_control(xref, xbar, x0)
         du = sum(abs(ov - pov)) + sum(abs(odyaw - podyaw))  # calc u change value
+        # print("U change value: ", sum(abs(ov - pov)), sum(abs(odyaw - podyaw)))
         if du <= DU_TH: # iteration finish param
             break
     else:
@@ -355,7 +357,7 @@ def linear_mpc_control(xref, xbar, x0):
         constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
 
         # anti-jackknife
-        constraints += [x[3, t] - x[2, t] <= np.deg2rad(45.0)]
+        constraints += [cvxpy.abs(x[3, t] - x[2, t]) <= np.deg2rad(45.0)]
         # TODO: anti-jackknife activated?
 
         if t < (T - 1):
@@ -374,6 +376,8 @@ def linear_mpc_control(xref, xbar, x0):
 
     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
     prob.solve(solver=cvxpy.ECOS, verbose=False)
+
+    # print("The cost function value: ", prob.value, get_nparray_from_matrix(x.value[1, :]))
 
     if prob.status == cvxpy.OPTIMAL or prob.status == cvxpy.OPTIMAL_INACCURATE:
         ox = get_nparray_from_matrix(x.value[0, :])
@@ -523,14 +527,14 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
             print("Goal")
             break
 
-        # print("ov, odyaw", ov, odyaw)
-        # print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
-        # print("ref", xref[0, :], xref[1, :], xref[2, :])
-        #
-        # print("state trailer: ", state.x, state.y, state.yawt,
-        #       "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
-        #       "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
-        #       state.yaw, "control input", dyawi, vi)
+        print("ov, odyaw", ov, odyaw)
+        print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
+        print("ref", xref[0, :], xref[1, :], xref[2, :])
+
+        print("state trailer: ", state.x, state.y, state.yawt,
+              "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
+              "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
+              state.yaw, "control input", dyawi, vi)
 
         if show_animation:  # pragma: no cover
             plt.cla()
@@ -658,8 +662,8 @@ def smooth_yaw(yaw):
 
 
 def get_straight_course(dl):
-    ax = [0.0, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
-    ay = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    ax = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    ay = [0.0, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
     cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
         ax, ay, ds=dl)
 
@@ -727,15 +731,17 @@ def main():
     dl = 1.0  # course tick
     # cx, cy, cyawt, ck = get_straight_course(dl)
     # cyawt = np.zeros(len(cyawt))
-    # cx, cy, cyawt, ck = get_straight_course2(dl)
+    cx, cy, cyawt, ck = get_straight_course2(dl)
+    cyawt = [pi_2_pi(i-math.pi) for i in cyawt]
     # cx, cy, cyawt, ck = get_straight_course3(dl)
     # cx, cy, cyawt, ck = get_forward_course(dl)
-    # print(cyawt)
+    print(cyawt)
     # cyawt = [abs(i) for i in cyawt]
-    cx, cy, cyawt, ck = get_switch_back_course(dl)
+    # cx, cy, cyawt, ck = get_switch_back_course(dl)
     # cx, cy, cyawt = get_circle_course(dl)
 
     sp = calc_speed_profile(cx, cy, cyawt, TARGET_SPEED)
+    # sp = [i*-1 for i in sp]
     # TODO: get cyaw from high-level planning part
     cyaw = np.copy(cyawt)
     print(sp)
