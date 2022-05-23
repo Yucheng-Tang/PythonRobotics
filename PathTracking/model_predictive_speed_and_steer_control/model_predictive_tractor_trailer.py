@@ -31,12 +31,13 @@ except:
 
 NX = 4 # x = x, y, yaw, yawt
 NU = 2 # u = [v, w]
-T = 10 # horizon length
+T = 5 # horizon length
 
 # mpc parameters
 R = np.diag([0.01, 0.01])  # input cost matrix
 Rd = np.diag([5.0, 5.0]) # ([0.01, 1.0])  # input difference cost matrix
-Q = np.diag([1.0, 1.0, 0.01, 1.0])  # state cost matrix
+Q = np.diag([1.0, 1.0, 0.01, 10.0])  # state cost matrix
+# 1 for pure backwards, 10 for switch during the path
 Qf = Q  # state final matrix
 GOAL_DIS = 1.5  # goal distance
 STOP_SPEED = 0.5 / 3.6  # stop speed
@@ -478,6 +479,7 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
     t = [0.0]
     dyaw = [0.0]
     v = [0.0]
+    diff_tar_act = []
     target_ind, _ = calc_nearest_index(state, cx, cy, cyawt, 0)
 
     # txt_list = [state.x-np.cos(state.yaw)]
@@ -495,10 +497,12 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
     while MAX_TIME >= time:
         xref, target_ind = calc_ref_trajectory(
             state, cx, cy, cyaw, cyawt, ck, sp, dl, target_ind)
-        print(target_ind)
+        # print(target_ind)
         # target_ind += 1
 
         x0 = [state.x, state.y, state.yaw, state.yawt]  # current state
+
+        diff_tar_act.append([abs(xref[0, 0] - state.x), abs(xref[1, 0] - state.y)])
 
         ov, odyaw, ox, oy, oyaw, oyawt = iterative_linear_mpc_control(
             xref, x0, ov, odyaw)
@@ -527,14 +531,14 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
             print("Goal")
             break
 
-        print("ov, odyaw", ov, odyaw)
-        print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
-        print("ref", xref[0, :], xref[1, :], xref[2, :])
-
-        print("state trailer: ", state.x, state.y, state.yawt,
-              "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
-              "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
-              state.yaw, "control input", dyawi, vi)
+        # print("ov, odyaw", ov, odyaw)
+        # print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
+        # print("ref", xref[0, :], xref[1, :], xref[2, :])
+        #
+        # print("state trailer: ", state.x, state.y, state.yawt,
+        #       "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
+        #       "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
+        #       state.yaw, "control input", dyawi, vi)
 
         if show_animation:  # pragma: no cover
             plt.cla()
@@ -566,8 +570,8 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
             plt.grid(True)
             # plt.title("Time[s]:" + str(round(time, 2))
             #           + ", speed[km/h]:" + str(round(state.v * 3.6, 2)))
-            plt.pause(0.05)
-    return t, x, y, yaw, yawt, dyaw, v, txt_list, tyt_list
+            plt.pause(0.0001)
+    return t, x, y, yaw, yawt, dyaw, v, txt_list, tyt_list, diff_tar_act
 
     # return t, x, y, yaw, v, dyaw, v, txm_list, tym_list, txt_list, tyt_list
 
@@ -731,13 +735,13 @@ def main():
     dl = 1.0  # course tick
     # cx, cy, cyawt, ck = get_straight_course(dl)
     # cyawt = np.zeros(len(cyawt))
-    cx, cy, cyawt, ck = get_straight_course2(dl)
-    cyawt = [pi_2_pi(i-math.pi) for i in cyawt]
+    # cx, cy, cyawt, ck = get_straight_course2(dl)
+    # cyawt = [pi_2_pi(i-math.pi) for i in cyawt]
     # cx, cy, cyawt, ck = get_straight_course3(dl)
     # cx, cy, cyawt, ck = get_forward_course(dl)
-    print(cyawt)
+    # print(cyawt)
     # cyawt = [abs(i) for i in cyawt]
-    # cx, cy, cyawt, ck = get_switch_back_course(dl)
+    cx, cy, cyawt, ck = get_switch_back_course(dl)
     # cx, cy, cyawt = get_circle_course(dl)
 
     sp = calc_speed_profile(cx, cy, cyawt, TARGET_SPEED)
@@ -748,10 +752,14 @@ def main():
 
     initial_state = State(x=cx[0], y=cy[0], yaw=cyaw[0], yawt=cyawt[0])
 
-    t, x, y, yaw, yawt, dyawt, v, txt, tyt = do_simulation(
+    t, x, y, yaw, yawt, dyawt, v, txt, tyt, diff = do_simulation(
         cx, cy, cyaw, cyawt, ck, sp, dl, initial_state)
 
+    print("diff", diff)
     print("control input:", dyawt, v)
+
+    diff = np.array(diff)
+    print("error: ", sum([math.sqrt(i[0] ** 2 + i[1] ** 2) for i in diff]))
 
     if show_animation:  # pragma: no cover
         plt.close("all")
@@ -772,7 +780,17 @@ def main():
         plt.xlabel("Time [s]")
         plt.ylabel("Speed [kmh]")
 
+        plt.subplots()
+        t = np.linspace(0, diff.shape[0], num=diff.shape[0])
+        plt.plot(t, diff.T[0], "-g", label="x_axis")
+        plt.plot(t, diff.T[1], "-b", label="y_axis")
+        plt.plot(t, [math.sqrt(i[0]**2 + i[1]**2) for i in diff], "-r", label="distance")
+        plt.grid(True)
+        plt.xlabel("Time [s]")
+        plt.ylabel("difference [m]")
+
         plt.show()
+
 
 
 def main2():
