@@ -2,7 +2,10 @@
 
 Path tracking simulation with iterative linear model predictive control
 
-Robot model: differential driven mobile robot with passive trailer
+Robot model: differential driven mobile robot with passive trailer, reference point on the trailer
+
+State variable: (x2, y2, theta1, theta2)
+Control input variable: (v1, w1)
 
 author: Yucheng Tang (@Yucheng-Tang)
 
@@ -35,9 +38,11 @@ T = 5 # horizon length
 
 # mpc parameters
 R = np.diag([0.01, 0.01])  # input cost matrix
-Rd = np.diag([5.0, 5.0]) # ([0.01, 1.0])  # input difference cost matrix
-Q = np.diag([1.0, 1.0, 0.01, 10.0])  # state cost matrix
+Rd = np.diag([0.01, 1.0]) # ([0.01, 1.0])  # input difference cost matrix
+Q = np.diag([10.0, 10.0, 0.01, 0.01])  # state cost matrix
+# on axis
 # 1 for pure backwards, 10 for switch during the path
+# 10, 10, 0.01, 0.1 for backwards circular movement
 Qf = Q  # state final matrix
 GOAL_DIS = 1.5  # goal distance
 STOP_SPEED = 0.5 / 3.6  # stop speed
@@ -63,14 +68,20 @@ WB = 2.5  # [m]
 ROD_LEN = 3.0 # [m]
 CP_OFFSET = 0.0 # [m]
 
-MAX_STEER = np.deg2rad(45.0)  # maximum steering angle [rad]
-MAX_DSTEER = np.deg2rad(30.0)  # maximum steering speed [rad/s]
+# MAX_STEER = np.deg2rad(45.0)  # maximum steering angle [rad]
+# MAX_DSTEER = np.deg2rad(30.0)  # maximum steering speed [rad/s]
 
-MAX_OMEGA = np.deg2rad(60.0)  # maximum rotation speed [rad/s]
+MAX_OMEGA = np.deg2rad(45.0)  # maximum rotation speed [rad/s]
 
-MAX_SPEED = 55.0 / 3.6  # maximum speed [m/s]
-MIN_SPEED = -20.0 / 3.6  # minimum speed [m/s]
-MAX_ACCEL = 1.0  # maximum accel [m/ss]
+MAX_SPEED = 20.0 / 3.6 # 55.0 / 3.6  # maximum speed [m/s]
+MIN_SPEED = - 20.0 / 3.6  # minimum speed [m/s]
+# MAX_ACCEL = 1.0  # maximum accel [m/ss]
+JACKKNIFE_CON = 30.0 # [degrees]
+
+CIR_RAD = 20 # radius of circular path [m]
+
+# TODO: add MODE parameter for path selection
+MODE = ""
 
 show_animation = True
 
@@ -242,6 +253,8 @@ def update_state(state, v, dyaw):
     elif dyaw <= -MAX_OMEGA:
         dyaw = -MAX_OMEGA
 
+    # print("update model: ", v, dyaw, state.yaw, state.yawt)
+
     # my model
     # state.x = state.x + v * math.cos(state.yawt - state.yaw) * math.cos(state.yawt) * DT
     # state.y = state.y + v * math.cos(state.yawt - state.yaw) * math.sin(state.yawt) * DT
@@ -358,8 +371,7 @@ def linear_mpc_control(xref, xbar, x0):
         constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
 
         # anti-jackknife
-        constraints += [cvxpy.abs(x[3, t] - x[2, t]) <= np.deg2rad(45.0)]
-        # TODO: anti-jackknife activated?
+        constraints += [cvxpy.abs(x[3, t] - x[2, t]) <= np.deg2rad(JACKKNIFE_CON)]
 
         if t < (T - 1):
             cost += cvxpy.quad_form(u[:, t + 1] - u[:, t], Rd)
@@ -376,7 +388,11 @@ def linear_mpc_control(xref, xbar, x0):
     constraints += [cvxpy.abs(u[1, :]) <= MAX_OMEGA]
 
     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
-    prob.solve(solver=cvxpy.ECOS, verbose=False)
+    prob.solve(solver=cvxpy.CVXOPT, verbose=False) # ECOS, CVXOPT
+    # TODO: get license form MOSEK website, academic email address is necessary
+
+
+    # print(cvxpy.installed_solvers())
 
     # print("The cost function value: ", prob.value, get_nparray_from_matrix(x.value[1, :]))
 
@@ -497,7 +513,7 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
     while MAX_TIME >= time:
         xref, target_ind = calc_ref_trajectory(
             state, cx, cy, cyaw, cyawt, ck, sp, dl, target_ind)
-        # print(target_ind)
+        print(target_ind)
         # target_ind += 1
 
         x0 = [state.x, state.y, state.yaw, state.yawt]  # current state
@@ -533,12 +549,12 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
 
         # print("ov, odyaw", ov, odyaw)
         # print("ox, oy, oyaw, oyawt", ox, oy, oyaw, oyawt)
-        # print("ref", xref[0, :], xref[1, :], xref[2, :])
+        print("ref", xref[0, :], xref[1, :], xref[2, :])
         #
-        # print("state trailer: ", state.x, state.y, state.yawt,
-        #       "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
-        #       "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
-        #       state.yaw, "control input", dyawi, vi)
+        print("state trailer: ", state.x, state.y, state.yawt,
+              "diff ref state trailer: ", (xref[0,0] - state.x),  xref[1,0] - state.y, xref[3,0] - state.yawt,
+              "state tractor: ", state.x + np.cos(state.yawt) * ROD_LEN, state.y + np.sin(state.yawt) * ROD_LEN,
+              state.yaw, "control input", dyawi, vi)
 
         if show_animation:  # pragma: no cover
             plt.cla()
@@ -689,7 +705,7 @@ def get_straight_course3(dl):
     cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
         ax, ay, ds=dl)
 
-    cyaw = [i - math.pi for i in cyaw]
+    cyaw = [pi_2_pi(i - math.pi) for i in cyaw]
 
     return cx, cy, cyaw, ck
 
@@ -720,13 +736,32 @@ def get_switch_back_course(dl):
 
     return cx, cy, cyaw, ck
 
-def get_circle_course(dl):
+def get_reverse_parking_course(dl):
+    ax = [0.0, -5.0, -10.0, -20.0, -40.0, -40.0, -40.0]
+    ay = [0.0, 0.0, 0.0, 0.0, -10.0, -20.0, -30.0]
+    cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
+        ax, ay, ds=dl)
+
+    cyaw = [pi_2_pi(i - math.pi) for i in cyaw]
+
+    return cx, cy, cyaw, ck
+
+
+def get_circle_course_forward(r):
     t = np.linspace(0, 2*math.pi, num=200)
-    ax = math.sin(t)
-    ay = math.cos(t)
+    ax = [r*math.sin(i) for i in t]
+    ay = [r*math.cos(i) for i in t]
+    ck = np.zeros(200)
 
-    return ax, ay, t
+    return ax, ay, -t, ck
 
+def get_circle_course_backward(r):
+    t = np.linspace(0, 2*math.pi, num=200)
+    ax = [- r*math.sin(i) for i in t]
+    ay = [r*math.cos(i) for i in t]
+    ck = np.zeros(200)
+
+    return ax, ay, t, ck
 
 
 def main():
@@ -741,8 +776,11 @@ def main():
     # cx, cy, cyawt, ck = get_forward_course(dl)
     # print(cyawt)
     # cyawt = [abs(i) for i in cyawt]
-    cx, cy, cyawt, ck = get_switch_back_course(dl)
-    # cx, cy, cyawt = get_circle_course(dl)
+    # cx, cy, cyawt, ck = get_switch_back_course(dl)
+    # cx, cy, cyawt, ck = get_circle_course_forward(CIR_RAD)
+    # cx, cy, cyawt, ck = get_circle_course_backward(CIR_RAD)
+    cx, cy, cyawt, ck = get_reverse_parking_course(dl)
+    # print(cyawt)
 
     sp = calc_speed_profile(cx, cy, cyawt, TARGET_SPEED)
     # sp = [i*-1 for i in sp]
@@ -751,6 +789,7 @@ def main():
     print(sp)
 
     initial_state = State(x=cx[0], y=cy[0], yaw=cyaw[0], yawt=cyawt[0])
+    # cyaw[0], cyawt[0]
 
     t, x, y, yaw, yawt, dyawt, v, txt, tyt, diff = do_simulation(
         cx, cy, cyaw, cyawt, ck, sp, dl, initial_state)
