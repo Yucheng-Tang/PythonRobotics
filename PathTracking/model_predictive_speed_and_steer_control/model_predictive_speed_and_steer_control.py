@@ -11,19 +11,26 @@ import math
 import numpy as np
 import sys
 import pathlib
+
+# casadi test
+from casadi import *
+
+# for non convex problem & convex-concave
+import dccp
+
 sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
 
 from PathPlanning.CubicSpline import cubic_spline_planner
 
 NX = 4  # x = x, y, v, yaw
 NU = 2  # a = [accel, steer]
-T = 5  # horizon length
+T = 6  # horizon length
 
 # mpc parameters
 R = np.diag([0.01, 0.01])  # input cost matrix
 Rd = np.diag([0.01, 1.0])  # input difference cost matrix
 Q = np.diag([1.0, 1.0, 0.5, 0.5])  # state cost matrix
-Qf = Q  # state final matrix
+Qf = 5 * Q  # state final matrix
 GOAL_DIS = 1.5  # goal distance
 STOP_SPEED = 0.5 / 3.6  # stop speed
 MAX_TIME = 500.0  # max simulation time
@@ -45,6 +52,11 @@ WHEEL_LEN = 0.3  # [m]
 WHEEL_WIDTH = 0.2  # [m]
 TREAD = 0.7  # [m]
 WB = 2.5  # [m]
+
+# Obstacle parameter
+O_X = 20
+O_Y = 1.5
+O_R = 2
 
 MAX_STEER = np.deg2rad(45.0)  # maximum steering angle [rad]
 MAX_DSTEER = np.deg2rad(30.0)  # maximum steering speed [rad/s]
@@ -69,17 +81,16 @@ class State:
 
 
 def pi_2_pi(angle):
-    while(angle > math.pi):
+    while (angle > math.pi):
         angle = angle - 2.0 * math.pi
 
-    while(angle < -math.pi):
+    while (angle < -math.pi):
         angle = angle + 2.0 * math.pi
 
     return angle
 
 
 def get_linear_model_matrix(v, phi, delta):
-
     A = np.zeros((NX, NX))
     A[0, 0] = 1.0
     A[1, 1] = 1.0
@@ -109,7 +120,8 @@ def plot_car(x, y, yaw, steer=0.0, cabcolor="-r", truckcolor="-k"):  # pragma: n
                         [WIDTH / 2, WIDTH / 2, - WIDTH / 2, -WIDTH / 2, WIDTH / 2]])
 
     fr_wheel = np.array([[WHEEL_LEN, -WHEEL_LEN, -WHEEL_LEN, WHEEL_LEN, WHEEL_LEN],
-                         [-WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD]])
+                         [-WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD,
+                          -WHEEL_WIDTH - TREAD]])
 
     rr_wheel = np.copy(fr_wheel)
 
@@ -160,7 +172,6 @@ def plot_car(x, y, yaw, steer=0.0, cabcolor="-r", truckcolor="-k"):  # pragma: n
 
 
 def update_state(state, a, delta):
-
     # input check
     if delta >= MAX_STEER:
         delta = MAX_STEER
@@ -185,7 +196,6 @@ def get_nparray_from_matrix(x):
 
 
 def calc_nearest_index(state, cx, cy, cyaw, pind):
-
     dx = [state.x - icx for icx in cx[pind:(pind + N_IND_SEARCH)]]
     dy = [state.y - icy for icy in cy[pind:(pind + N_IND_SEARCH)]]
 
@@ -255,6 +265,154 @@ def linear_mpc_control(xref, xbar, x0, dref):
     dref: reference steer angle
     """
 
+    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",xref)
+
+    # x = MX.sym('x')
+    # y = MX.sym('y')
+    # yaw = MX.sym('yaw')
+    # v = MX.sym('v')
+    # # yawt = MX.sys('yawt')
+    #
+    # # states = [x,y,yaw,v]
+    # states = vertcat(x,y,yaw,v)
+    #
+    #
+    # a = MX.sym('a')
+    # delta = MX.sym('delta')
+    # # w = MX.sys('w')
+    #
+    # # controls = [a, delta]
+    # controls = vertcat(a, delta)
+    #
+    # xdot = vertcat(v*cos(yaw), v*sin(yaw), v/WB*tan(delta), a)
+    #
+    # f = Function('f', [states, controls], [xdot])
+    #
+    # x_variable = MX.sym('x_variable', NX, T+1)
+    # u_variable = MX.sym('u_variable', NU, T)
+    #
+    # ref_variable = MX.sym('ref_variable', NX, T+1)
+    #
+    # print(states, controls)
+    # print(f)
+    # print(x_variable, u_variable)
+    #
+    # f_test = f([1,2,3,4], [1,2])
+    #
+    # # x_variable[:, 0] = x0
+    # # print("x0", x_variable[:, 0])
+    # for t in range(T):
+    #     st = x_variable[:, t]
+    #     con = u_variable[:, t]
+    #     f_value = f(st, con)
+    #     print(st, f_value)
+    #     st_next = st+DT*f_value
+    #     x_variable[:, t+1] = st_next
+    #
+    # obj = 0
+    # constraint = []
+    #
+    # for t in range(T):
+    #     st = x_variable[:, t]
+    #     ref = xref[:, t]
+    #     con = u_variable[:, t]
+    #
+    #     # print(R.shape, con.shape)
+    #     obj += u_variable[:, t].T @ R @ u_variable[:, t]  # control cost
+    #
+    #     if t < (T - 1):
+    #         obj += (u_variable[:, t+1] - u_variable[:, t]).T @ Rd @ (u_variable[:, t+1] - u_variable[:, t])
+    #
+    #     if t != 0:
+    #         obj += (xref[:, t] - x_variable[:, t]).T@Q@(xref[:, t] - x_variable[:, t]) # stage cost
+    #
+    # obj += (xref[:, T] - x_variable[:, T]).T@ Qf @(xref[:, T] - x_variable[:, T])
+    #
+    # constraint += [x[:, 0] == x0]
+    #
+    # # Create an NLP solver
+    # prob = {'f': obj, 'x': vertcat(*u_variable), 'g': vertcat(*constraint)}
+    # solver = nlpsol('solver', 'ipopt', prob)
+    #
+    # # Solve the NLP
+    # sol = solver(x0=x0, lbx=lbw, ubx=ubw, lbg=lbg, ubg=ubg)
+    # w_opt = sol['x']
+
+    # opti = casadi.Opti();
+    #
+    # x = opti.variable(NX, T+1)
+    # u = opti.variable(NU, T)
+    #
+    # p = opti.parameter(NX, T+1)
+    #
+    # opti.set_value(p,xref)
+    # # print(p.shape)
+    # # for i in range(NX):
+    # #     for j in range(T+1):
+    # #         print(i,j)
+    # #         p[i,j] = xref[i, j]
+    # # print(p.shape)
+    # obj = 0
+    # # constraint = []
+    #
+    # for t in range(T):
+    #     # st = x[:, t]
+    #     # ref = xref[:, t]
+    #     # con = u[:, t]
+    #
+    #     # print(R.shape, con.shape)
+    #     obj += u[:, t].T @ R @ u[:, t]  # control cost
+    #
+    #     if t < (T - 1):
+    #         obj += (u[:, t+1] - u[:, t]).T @ Rd @ (u[:, t+1] - u[:, t])
+    #
+    #     if t != 0:
+    #         obj += (p[:, t] - x[:, t]).T@Q@(p[:, t] - x[:, t]) # stage cost
+    #
+    # obj += (p[:, T] - x[:, T]).T @ Qf @ (p[:, T] - x[:, T])
+    #
+    # # print(p[2, :]-x[2, :])
+    # # opti.minimize((p[2, :]-x[2, :])@(p[2, :]-x[2, :]).T)
+    # opti.minimize(obj)
+    #
+    # # v * cos(yaw), v * sin(yaw), v / WB * tan(delta), a
+    # A, B, C = get_linear_model_matrix(
+    #     xbar[2, t], xbar[3, t], dref[0, t])
+    # #     constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
+    # for t in range(T):
+    #     # opti.subject_to(x[0, t + 1] == x[0, t] + u[0, t] * cos(x[2, t]) * DT)
+    #     # opti.subject_to(x[1, t + 1] == x[1, t] + u[0, t] * sin(x[2, t]) * DT)
+    #     # opti.subject_to(x[2, t + 1] == x[2, t] + u[0, t] * DT)
+    #     # opti.subject_to(x[3, t + 1] == x[3, t] + u[0, t] / WB * tan(u[1, t]) * DT)
+    #     opti.subject_to(x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C)
+    #
+    #     lam = 0.5
+    #     # opti.subject_to((x[0, t + 1] - 20) * (x[0, t + 1] - 20) + (x[1, t + 1] - 1.5) * (x[1, t + 1] - 1.5) >= 1)
+    #     # 0.5 * ((x[0, t] - 20) * (x[0, t] - 20) + (x[1, t + 1]) * (x[1, t + 1]) - 4)
+    #     # (1 - lam) * ((x[0, t] - O_X)**2 + (x[1, t] - O_Y)**2 - O_R ** 2))
+    #
+    #     if t < (T - 1):
+    #         opti.subject_to(fabs(u[1, t + 1] - u[1, t]) <= MAX_DSTEER * DT)
+    #
+    # opti.subject_to(x[:, 0] == x0)
+    # opti.subject_to(x[2, :] <= MAX_SPEED)
+    # opti.subject_to(x[2, :] >= MIN_SPEED)
+    # opti.subject_to(fabs(u[0, :]) <= MAX_ACCEL)
+    # opti.subject_to(fabs(u[1, :]) <= MAX_STEER)
+    #
+    # opti.solver("ipopt")  # set numerical backend
+    # sol = opti.solve()
+    #
+    # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", opti.debug, sol.value, sol.value(x), sol.value(u))
+    # # print(obj)
+    # ox = get_nparray_from_matrix(sol.value(x)[0, :])
+    # oy = get_nparray_from_matrix(sol.value(x)[1, :])
+    # ov = get_nparray_from_matrix(sol.value(x)[2, :])
+    # oyaw = get_nparray_from_matrix(sol.value(x)[3, :])
+    # oa = get_nparray_from_matrix(sol.value(u)[0, :])
+    # odelta = get_nparray_from_matrix(sol.value(u)[1, :])
+    # print((ox[0]-20)**2 + (oy[0]-1.5)**2 -1)
+
     x = cvxpy.Variable((NX, T + 1))
     u = cvxpy.Variable((NU, T))
 
@@ -266,15 +424,28 @@ def linear_mpc_control(xref, xbar, x0, dref):
 
         if t != 0:
             cost += cvxpy.quad_form(xref[:, t] - x[:, t], Q)
+            if t == T - 1:
+                cost += 5 * cvxpy.quad_form(xref[:, t] - x[:, t], Q)
 
         A, B, C = get_linear_model_matrix(
             xbar[2, t], xbar[3, t], dref[0, t])
         constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
 
+        # Obstacle pose (10,10) with diameter 5m
+        obstacle = [20, 0]
+        dist = x[:2, t]-obstacle
+        cons = [9,9]
+        lam = 0.2
+        constraints += [(cvxpy.norm(x[0, t + 1] - O_X, 2) + cvxpy.norm(x[1, t + 1] - O_Y, 2) - O_R**2) >=
+                         (1 - lam) * (cvxpy.norm(x[0, t] - O_X, 2) + cvxpy.norm(x[1, t] - O_Y, 2) - O_R**2)]
+
+
         if t < (T - 1):
             cost += cvxpy.quad_form(u[:, t + 1] - u[:, t], Rd)
             constraints += [cvxpy.abs(u[1, t + 1] - u[1, t]) <=
                             MAX_DSTEER * DT]
+            # constraints += [(cvxpy.norm(x[0, t + 1] - 20, 2) + cvxpy.norm(x[1, t + 1], 2) - 1) - 0.5 * (
+            #         cvxpy.norm(x[0, t] - 20, 2) + cvxpy.norm(x[1, t], 2) - 1) >= 0]
 
     cost += cvxpy.quad_form(xref[:, T] - x[:, T], Qf)
 
@@ -285,9 +456,16 @@ def linear_mpc_control(xref, xbar, x0, dref):
     constraints += [cvxpy.abs(u[1, :]) <= MAX_STEER]
 
     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
-    prob.solve(solver=cvxpy.ECOS, verbose=False)
+    # print("problem is DCP:", prob.is_dcp())  # false
+    # print("problem is DCCP:", dccp.is_dccp(prob))  # true
+    # prob.solve(solver=cvxpy.ECOS, verbose=False)
+    prob.solve(solver=cvxpy.ECOS, verbose=False, method='dccp')
 
-    if prob.status == cvxpy.OPTIMAL or prob.status == cvxpy.OPTIMAL_INACCURATE:
+    # print(prob.status, x.value)
+    print(- (x.value[0, 0] - 20)**2 - (x.value[1, 0] - 20)**2)
+
+    # if prob.status == cvxpy.OPTIMAL or prob.status == cvxpy.OPTIMAL_INACCURATE:
+    if prob.status == "Converged":
         ox = get_nparray_from_matrix(x.value[0, :])
         oy = get_nparray_from_matrix(x.value[1, :])
         ov = get_nparray_from_matrix(x.value[2, :])
@@ -341,7 +519,6 @@ def calc_ref_trajectory(state, cx, cy, cyaw, ck, sp, dl, pind):
 
 
 def check_goal(state, goal, tind, nind):
-
     # check goal
     dx = state.x - goal[0]
     dy = state.y - goal[1]
@@ -428,9 +605,13 @@ def do_simulation(cx, cy, cyaw, ck, sp, dl, initial_state):
             plt.cla()
             # for stopping simulation with the esc key.
             plt.gcf().canvas.mpl_connect('key_release_event',
-                    lambda event: [exit(0) if event.key == 'escape' else None])
+                                         lambda event: [exit(0) if event.key == 'escape' else None])
             if ox is not None:
                 plt.plot(ox, oy, "xr", label="MPC")
+            theta = np.linspace(0, 2 * np.pi, 100)
+            circle_x = O_X + O_R * np.cos(theta)
+            circle_y = O_Y + O_R * np.sin(theta)
+            plt.plot(circle_x, circle_y)
             plt.plot(cx, cy, "-r", label="course")
             plt.plot(x, y, "ob", label="trajectory")
             plt.plot(xref[0, :], xref[1, :], "xk", label="xref")
@@ -446,7 +627,6 @@ def do_simulation(cx, cy, cyaw, ck, sp, dl, initial_state):
 
 
 def calc_speed_profile(cx, cy, cyaw, target_speed):
-
     speed_profile = [target_speed] * len(cx)
     direction = 1.0  # forward
 
@@ -475,7 +655,6 @@ def calc_speed_profile(cx, cy, cyaw, target_speed):
 
 
 def smooth_yaw(yaw):
-
     for i in range(len(yaw) - 1):
         dyaw = yaw[i + 1] - yaw[i]
 
@@ -550,11 +729,11 @@ def main():
     print(__file__ + " start!!")
 
     dl = 1.0  # course tick
-    # cx, cy, cyaw, ck = get_straight_course(dl)
+    cx, cy, cyaw, ck = get_straight_course(dl)
     # cx, cy, cyaw, ck = get_straight_course2(dl)
     # cx, cy, cyaw, ck = get_straight_course3(dl)
     # cx, cy, cyaw, ck = get_forward_course(dl)
-    cx, cy, cyaw, ck = get_switch_back_course(dl)
+    # cx, cy, cyaw, ck = get_switch_back_course(dl)
 
     sp = calc_speed_profile(cx, cy, cyaw, TARGET_SPEED)
 
@@ -617,5 +796,17 @@ def main2():
 
 
 if __name__ == '__main__':
+    x = cvxpy.Variable(2)
+    y = cvxpy.Variable(2)
+    myprob = cvxpy.Problem(cvxpy.Maximize(cvxpy.norm(x - y, 2)), [0 <= x, x <= 1, 0 <= y, y <= 1])
+    print("problem is DCP:", myprob.is_dcp())  # false
+    print("problem is DCCP:", dccp.is_dccp(myprob))  # true
+    result = myprob.solve(method='dccp')
+    print(myprob.status)
+    print("x =", x.value)
+    print("y =", y.value)
+    print("cost value =", result[0])
+
+
     main()
     # main2()
