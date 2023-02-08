@@ -25,7 +25,7 @@ time_interval = 10
 
 # Define problem
 U_min = -np.array([v_limit, np.deg2rad(90.0)])
-U_max =  np.array([0, np.deg2rad(90.0)])
+U_max =  np.array([v_limit, np.deg2rad(90.0)])
 U_min_random = U_min
 U_max_random = U_max
 for i in range(time_interval-1):
