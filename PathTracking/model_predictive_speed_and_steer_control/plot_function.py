@@ -123,7 +123,7 @@ def f(x, u):
 start = time.time()
 
 # RandUP
-M    = 10000000
+M    = 1000
 x = [0, 0, 0, -0] # 0.5234
 # with random control inputs but keep same during the time interval
 ys = np.zeros((M, 4))
