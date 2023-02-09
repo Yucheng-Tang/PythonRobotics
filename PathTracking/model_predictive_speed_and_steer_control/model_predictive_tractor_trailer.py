@@ -11,6 +11,7 @@ author: Yucheng Tang (@Yucheng-Tang)
 
 Citation: Atsushi Sakai (@Atsushi_twi)
 """
+import casadi
 import matplotlib.pyplot as plt
 import cvxpy
 import math
@@ -24,7 +25,6 @@ import dccp
 
 from casadi import *
 
-
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) +
                 "/../../PathPlanning/CubicSpline/")
 
@@ -33,31 +33,32 @@ try:
 except:
     raise
 
-
 # NX = 4  # x = x, y, v, yaw
 # NU = 2  # a = [accel, steer]
 # T = 5  # horizon length
 
-NX = 4 # x = x, y, yaw, yawt
-NU = 2 # u = [v, w]
-T = 20 # horizon length 5
+NX = 4  # x = x, y, yaw, yawt
+NU = 2  # u = [v, w]
+T = 20  # horizon length 5
+
+lam = 0.05  # barrier function param
 
 # mpc parameters
 R = np.diag([0.01, 0.01])  # input cost matrix
-Rd = np.diag([0.01, 1.0]) # ([0.01, 1.0])  # input difference cost matrix
+Rd = np.diag([0.01, 1.0])  # ([0.01, 1.0])  # input difference cost matrix
 Q = np.diag([1.0, 1.0, 0.001, 0.1])
-    # np.diag([10.0, 10.0, 0.01, 0.01])  # state cost matrix
+# np.diag([10.0, 10.0, 0.01, 0.01])  # state cost matrix
 # on axis
 # 1 for pure backwards, 10 for switch during the path
 # 10, 10, 0.01, 0.1 for backwards circular movement
-Qf =  np.diag([20.0, 20.0, 0.01, 1])  # state final matrix
+Qf = np.diag([20.0, 20.0, 0.01, 1])  # state final matrix
 GOAL_DIS = 1.5  # goal distance
 STOP_SPEED = 0.5 / 3.6  # stop speed
 MAX_TIME = 500.0  # max simulation time
 
 # iterative paramter
 MAX_ITER = 5  # Max iteration
-DU_TH = 0.1 # 0.1  # iteration finish param
+DU_TH = 0.1  # 0.1  # iteration finish param
 
 TARGET_SPEED = 0.25  # [m/s] target speed
 N_IND_SEARCH = 10  # Search index number
@@ -73,13 +74,13 @@ WHEEL_LEN = 0.1  # [m]
 WHEEL_WIDTH = 0.05  # [m]
 TREAD = 0.2  # [m]
 WB = 0.3  # [m]
-ROD_LEN = 0.5 # [m]
-CP_OFFSET = 0.1 # [m]
+ROD_LEN = 0.5  # [m]
+CP_OFFSET = 0.1  # [m]
 
 # Obstacle parameter
 O_X = [-5]
 O_Y = [0]
-O_R = [1]
+O_R = [0.8]
 O_D = [100000000]
 
 # MAX_STEER = np.deg2rad(45.0)  # maximum steering angle [rad]
@@ -87,23 +88,27 @@ O_D = [100000000]
 
 MAX_OMEGA = np.deg2rad(90.0)  # maximum rotation speed [rad/s]
 
-MAX_SPEED = 3.0 # 55.0 / 3.6  # maximum speed [m/s]
+MAX_SPEED = 3.0  # 55.0 / 3.6  # maximum speed [m/s]
 MIN_SPEED = - 3.0  # minimum speed [m/s]
 # MAX_ACCEL = 1.0  # maximum accel [m/ss]
-JACKKNIFE_CON = 45.0 # [degrees]
+JACKKNIFE_CON = 45.0  # [degrees]
 
-CIR_RAD = 5 # radius of circular path [m]
+CIR_RAD = 5  # radius of circular path [m]
 
 TIME_LIST = []
 
 PX_SET = []
 PY_SET = []
+X_SET = []
+Y_SET = []
 
+BARRIER_LIST = []
 
 # TODO: add MODE parameter for path selection
 MODE = ""
 
 show_animation = True
+
 
 # TODO: add control horizon variable
 # TODO: Notebook and Git
@@ -113,7 +118,7 @@ class State:
     vehicle state class
     """
 
-    def __init__(self, x=0.0, y=0.0, yaw=0.0, yawt=0.0, v = 0.0, dyaw = 0.0):
+    def __init__(self, x=0.0, y=0.0, yaw=0.0, yawt=0.0, v=0.0, dyaw=0.0):
         self.x = x
         self.y = y
         self.yaw = yaw
@@ -124,10 +129,10 @@ class State:
 
 
 def pi_2_pi(angle):
-    while(angle > math.pi):
+    while (angle > math.pi):
         angle = angle - 2.0 * math.pi
 
-    while(angle < -math.pi):
+    while (angle < -math.pi):
         angle = angle + 2.0 * math.pi
 
     return angle
@@ -205,20 +210,22 @@ def get_linear_model_matrix(xref_t, xref_t1, x_t):
 
     return A, B, C
 
+
 # TODO: modify the plot_car to use x2, y2, yaw and yawt, plot tractor-trailer system in one function?
 def plot_car(x, y, yaw, length, steer=0.0, cabcolor="-r", truckcolor="-k"):  # pragma: no cover
     # using BACKTOWHEEL parameter
     # outline = np.array([[-BACKTOWHEEL, (length - BACKTOWHEEL), (length - BACKTOWHEEL), -BACKTOWHEEL, -BACKTOWHEEL],
     #                    [WIDTH / 2, WIDTH / 2, - WIDTH / 2, -WIDTH / 2, WIDTH / 2]])
 
-    outline = np.array([[-length/2, (length - length/2), (length - length/2), -length/2, -length/2],
+    outline = np.array([[-length / 2, (length - length / 2), (length - length / 2), -length / 2, -length / 2],
                         [WIDTH / 2, WIDTH / 2, - WIDTH / 2, -WIDTH / 2, WIDTH / 2]])
 
     # fr_wheel = np.array([[WHEEL_LEN, -WHEEL_LEN, -WHEEL_LEN, WHEEL_LEN, WHEEL_LEN],
     #                      [-WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD]])
 
     rr_wheel = np.array([[WHEEL_LEN, -WHEEL_LEN, -WHEEL_LEN, WHEEL_LEN, WHEEL_LEN],
-                         [-WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD]])
+                         [-WHEEL_WIDTH - TREAD, -WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD, WHEEL_WIDTH - TREAD,
+                          -WHEEL_WIDTH - TREAD]])
 
     # fl_wheel = np.copy(fr_wheel)
     # fl_wheel[1, :] *= -1
@@ -265,8 +272,8 @@ def plot_car(x, y, yaw, length, steer=0.0, cabcolor="-r", truckcolor="-k"):  # p
              np.array(rl_wheel[1, :]).flatten(), truckcolor)
     plt.plot(x, y, "*")
 
-def update_state(state, v, dyaw):
 
+def update_state(state, v, dyaw):
     # print("(x,y, yaw, yawt): ", state.x, state.y, state.yaw, state.yawt, " control input (v, dyaw):", v, dyaw)
 
     # input check
@@ -290,7 +297,7 @@ def update_state(state, v, dyaw):
     state_new.y = state.y + v * math.cos(state.yaw - state.yawt) * math.sin(state.yawt) * DT
     state_new.yaw = state.yaw + dyaw * DT
     state_new.yawt = state.yawt + v / ROD_LEN * math.sin(state.yaw - state.yawt) * DT \
-                    - CP_OFFSET * dyaw * math.cos(state.yaw - state.yawt) / ROD_LEN * DT
+                     - CP_OFFSET * dyaw * math.cos(state.yaw - state.yawt) / ROD_LEN * DT
 
     # state.x = state.x + v * math.cos(state.yaw - state.yawt) * math.cos(state.yawt) * DT
     # state.y = state.y + v * math.cos(state.yaw - state.yawt) * math.sin(state.yawt) * DT
@@ -305,7 +312,6 @@ def get_nparray_from_matrix(x):
 
 
 def calc_nearest_index(state, cx, cy, cyaw, pind):
-
     dx = [state.x - icx for icx in cx[pind:(pind + N_IND_SEARCH)]]
     dy = [state.y - icy for icy in cy[pind:(pind + N_IND_SEARCH)]]
 
@@ -344,6 +350,52 @@ def predict_motion(x0, ov, odyaw, xref):
     return xbar
 
 
+def predict_motion_mpc(x, u):
+    x1 = x
+    x1[0] = x[0] + u[0] * cos(x[2] - x[3]) * cos(x[3]) * DT
+    x1[1] = x[1] + u[0] * cos(x[2] - x[3]) * sin(x[3]) * DT
+    x1[2] = x[2] + u[1] * DT
+    x1[3] = x[3] + u[0] / ROD_LEN * sin(x[2] - x[3]) * DT - CP_OFFSET * u[1] * cos(
+        x[2] - x[3]) / ROD_LEN * DT
+    return x1
+
+
+def cal_line2circle(Ax, Ay, Bx, By, Cx, Cy, R):
+    LAB = casadi.sqrt((Bx - Ax) ** 2 + (By - Ay) ** 2)
+
+    Dx = (Bx - Ax) / LAB
+    Dy = (By - Ay) / LAB
+
+    t = Dx * (Cx - Ax) + Dy * (Cy - Ay)
+
+    Ex = t * Dx + Ax
+    Ey = t * Dy + Ay
+
+    LEC = casadi.sqrt((Ex - Cx) ** 2 + (Ey - Cy) ** 2)
+
+    test_var = (t - casadi.sqrt(R ** 2 - LEC ** 2)) * Dx + Ax
+
+    # dt =
+    # dt = casadi.if_else(casadi.sqrt(R ** 2 - LEC ** 2)<-casadi.inf, 1,0)
+    # Px1 = casadi.if_else(R < LEC, casadi.sqrt(LEC**2 - R**2), 0)
+    # Px1 = LEC
+
+
+    Px1 = casadi.if_else(LEC < R, (t - casadi.sqrt(fabs(R ** 2 - LEC ** 2))) * Dx + Ax, 0)
+    Py1 = casadi.if_else(LEC < R, (t - casadi.sqrt(fabs(R ** 2 - LEC ** 2))) * Dy + Ay, 0)
+
+    Px2 = casadi.if_else(LEC < R, (t + casadi.sqrt(fabs(R ** 2 - LEC ** 2))) * Dx + Ax, 0)
+    Py2 = casadi.if_else(LEC < R, (t + casadi.sqrt(fabs(R ** 2 - LEC ** 2))) * Dy + Ay, 0)
+
+    # print("test!!!!!!!!!!!!!!!!!!!!!!!!!!", Px1)
+
+    res = casadi.power(Px2 - Px1, 2) + casadi.power(Py2 - Py1, 2) + 0.0000001
+    res = casadi.sqrt(res)
+
+    # return casadi.sqrt(casadi.power(Px2 - Px1, 2) + casadi.power(Py2 - Py1, 2))
+    return res
+    # return Px1
+
 def iterative_linear_mpc_control(xref, x0, ov, odyaw):
     """
     MPC contorl with updating operational point iteraitvely
@@ -360,12 +412,13 @@ def iterative_linear_mpc_control(xref, x0, ov, odyaw):
         # print("ov_size: ", ov.shape)
         du = sum(abs(ov - pov)) + sum(abs(odyaw - podyaw))  # calc u change value
         # print("U change value: ", sum(abs(ov - pov)), sum(abs(odyaw - podyaw)))
-        if du <= DU_TH: # iteration finish param
+        if du <= DU_TH:  # iteration finish param
             break
     else:
         print("Iterative is max iter")
 
     return ov, odyaw, ox, oy, oyaw, oyawt
+
 
 # TODO: check control model
 def linear_mpc_control(xref, xbar, x0):
@@ -382,10 +435,12 @@ def linear_mpc_control(xref, xbar, x0):
 
     opti = casadi.Opti();
 
-    x = opti.variable(NX, T+1)
+    x = opti.variable(NX, T + 1)
     u = opti.variable(NU, T)
 
-    p = opti.parameter(NX, T+1)
+    y = opti.variable(NX, 1000)
+
+    p = opti.parameter(NX, T + 1)
 
     opti.set_value(p, xref)
     # for i in range(NX):
@@ -396,6 +451,11 @@ def linear_mpc_control(xref, xbar, x0):
     obj = 0
     # constraint = []
 
+    # for i in range(1000):
+    #     for t in range(5):
+    #         if t == 0:
+    #             y[:, i] = predict_motion_mpc(x[:, 9], )
+
     for t in range(T):
         # st = x[:, t]
         # ref = xref[:, t]
@@ -405,70 +465,138 @@ def linear_mpc_control(xref, xbar, x0):
         obj += u[:, t].T @ R @ u[:, t]  # control(velocity) cost
 
         if t < (T - 1):
-            obj += (u[:, t+1] - u[:, t]).T @ Rd @ (u[:, t+1] - u[:, t]) # acceleration cost
+            obj += (u[:, t + 1] - u[:, t]).T @ Rd @ (u[:, t + 1] - u[:, t])  # acceleration cost
 
         if t != 0:
-            obj += (p[:, t] - x[:, t]).T@Q@(p[:, t] - x[:, t]) # stage cost
+            obj += (p[:, t] - x[:, t]).T @ Q @ (p[:, t] - x[:, t])  # stage cost
 
-    obj += (p[:, T] - x[:, T]).T @ Qf @ (p[:, T] - x[:, T]) # terminal cost
+    obj += (p[:, T] - x[:, T]).T @ Qf @ (p[:, T] - x[:, T])  # terminal cost
 
     # print(p[2, :]-x[2, :])
     # opti.minimize((p[2, :]-x[2, :])@(p[2, :]-x[2, :]).T)
-    opti.minimize(obj)
 
     # v * cos(yaw), v * sin(yaw), v / WB * tan(delta), a
     A, B, C = get_linear_model_matrix(
-            xref[:, t], xref[:, t+1], xbar[:, t])
+        xref[:, t], xref[:, t + 1], xbar[:, t])
     #     constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
+
+    t_ref = 10
+
+    # # sample based reachable set in cost function
+    # U_min = np.array([MIN_SPEED, -MAX_OMEGA])
+    # U_max = np.array([MAX_SPEED, MAX_OMEGA])
+    #
+    # M = 1000
+    # ys = np.zeros((M, 4))
+    # x_init = x[:, t_ref-1]
+    # us = np.random.uniform(low=U_max, high=U_min, size=(M, 2))
+    # for t in range(T-t_ref+1):
+    #     if t == 0:
+    #         for i in range(len(us)):
+    #             ys[i, :] = predict_motion_mpc(x, us[i])
+    #     else:
+    #         for i in range(len(us)):
+    #             ys[i, :] = predict_motion_mpc(ys[i], us[i])
+    # print(ys.shape)
+
+    x1 = x[0, t_ref - 1]
+    y1 = x[1, t_ref - 1]
+    yaw1 = x[2, t_ref - 1]
+    yawt1 = x[3, t_ref - 1]
+
+    x2 = x[0, t_ref - 1]
+    y2 = x[1, t_ref - 1]
+    yaw2 = x[2, t_ref - 1]
+    yawt2 = x[3, t_ref - 1]
 
     # Reachable set
     for t in range(T):
-        opti.subject_to(x[0, t+1] == x[0, t] + u[0, t]*cos(x[2, t]-x[3, t])*cos(x[3, t]) * DT)
-        opti.subject_to(x[1, t + 1] == x[1, t] + u[0, t] * cos(x[2, t]-x[3, t])*sin(x[3, t]) * DT)
+        opti.subject_to(x[0, t + 1] == x[0, t] + u[0, t] * cos(x[2, t] - x[3, t]) * cos(x[3, t]) * DT)
+        opti.subject_to(x[1, t + 1] == x[1, t] + u[0, t] * cos(x[2, t] - x[3, t]) * sin(x[3, t]) * DT)
         opti.subject_to(x[2, t + 1] == x[2, t] + u[1, t] * DT)
-        opti.subject_to(x[3, t + 1] == x[3, t] + u[0, t] / ROD_LEN * sin(x[2, t]-x[3, t]) * DT - CP_OFFSET * u[1, t] *
-                        cos(x[2, t]-x[3, t]) / ROD_LEN * DT)
+        opti.subject_to(x[3, t + 1] == x[3, t] + u[0, t] / ROD_LEN * sin(x[2, t] - x[3, t]) * DT - CP_OFFSET * u[1, t] *
+                        cos(x[2, t] - x[3, t]) / ROD_LEN * DT)
         # opti.subject_to(x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C)
-        if t == 10:
-            x1 = x[0, t+1]
-            y1 = x[1, t+1]
-            yaw1 = x[2, t+1]
-            yawt1 = x[3, t+1]
+        if t == t_ref:
+            # x1 = x[0, t + 1]
+            # y1 = x[1, t + 1]
+            # yaw1 = x[2, t + 1]
+            # yawt1 = x[3, t + 1]
             x2 = 0
             y2 = 0
             yaw2 = 0
             yawt2 = 0
+            # x11 = x[0, t + 1]
+            # y11 = x[1, t + 1]
+            # yaw11 = x[2, t + 1]
+            # yawt11 = x[3, t + 1]
             print("12345", x1, y1, yaw1, yawt1)
-            for t1 in range(T-10):
-                x2 = x1 + MIN_SPEED*cos(yaw1-yawt1)*cos(yawt1)*DT
-                y2 = y1 + MIN_SPEED*cos(yaw1-yawt1)*sin(yawt1)*DT
-                yaw2 = yaw1
-                yawt2 = yawt1 + MIN_SPEED/ROD_LEN * sin(yaw1-yawt1)*DT
-                x1 = x2
-                y1 = y2
-                yaw1 = yaw2
-                yawt1 = yawt2
-            print("12345", x1, y1, yaw1, yawt1)
+            for t1 in range(T - t_ref):
+                # x2 = x1 + MIN_SPEED * cos(yaw1 - yawt1) * cos(yawt1) * DT
+                # y2 = y1 + MIN_SPEED * cos(yaw1 - yawt1) * sin(yawt1) * DT
+                # yaw2 = yaw1
+                # yawt2 = yawt1 + MIN_SPEED / ROD_LEN * sin(yaw1 - yawt1) * DT
+                x3 = x1 + MIN_SPEED * cos(yaw1 - yawt1) * cos(yawt1) * DT
+                y3 = y1 + MIN_SPEED * cos(yaw1 - yawt1) * sin(yawt1) * DT
+                yaw3 = yaw1 + np.deg2rad(90) * DT
+                yawt3 = yawt1 + MIN_SPEED / ROD_LEN * sin(yaw1 - yawt1) * DT - CP_OFFSET * np.deg2rad(90) * cos(
+                    yaw1 - yawt1) / ROD_LEN * DT
+                x1 = x3
+                y1 = y3
+                yaw1 = yaw3
+                yawt1 = yawt3
+                x3 = x2 + MIN_SPEED * cos(yaw2 - yawt2) * cos(yawt2) * DT
+                y3 = y2 + MIN_SPEED * cos(yaw2 - yawt2) * sin(yawt2) * DT
+                yaw3 = yaw2 - np.deg2rad(90) * DT
+                yawt3 = yawt2 + MIN_SPEED / ROD_LEN * sin(yaw2 - yawt2) * DT - CP_OFFSET * (-np.deg2rad(90)) * cos(
+                    yaw2 - yawt2) / ROD_LEN * DT
+                x2 = x3
+                y2 = y3
+                yaw2 = yaw3
+                yawt2 = yawt3
+            # print("12345", x1, y1, yaw1, yawt1)
+            # print("12345", x11, y11, yaw11, yawt11)
             # opti.subject_to((x1 - O_X[0]) * (x1 - O_X[0]) + (y1 - O_Y[0]) * (y1 - O_Y[0]) - O_R[0] ** 2 >= 0)
+            # opti.subject_to((x2 - O_X[0]) * (x2 - O_X[0]) + (y2 - O_Y[0]) * (y2 - O_Y[0]) - O_R[0] ** 2 >= 0)
             # opti.subject_to((x1 - O_X[0]) * (x1 - O_X[0]) + (y1 - O_Y[0]) * (y1 - O_Y[0]) - O_R[0] ** 2 >= 0.8 * (
             #             (x2 - O_X[0]) * (x2 - O_X[0]) + (y2 - O_Y[0]) * (y2 - O_Y[0]) - O_R[0] ** 2))
+        # calculate the intersection length between circle and line segment
+            print("test!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", cal_line2circle(x1, y1, x2, y2, O_X[0], O_Y[0], O_R[0]))
+            # obj += cal_line2circle(x1, y1, x2, y2, O_X[0], O_Y[0], O_R[0])
+            # opti.subject_to(cal_line2circle(x1, y1, x2, y2, O_X[0], O_Y[0], O_R[0]) <= 1.2)
+            rad_cbf = (1 - lam) * ((x[0, t] - O_X[0]) * (x[0, t] - O_X[0]) + (x[1, t] - O_Y[0]) * (x[1, t] - O_Y[0]) - O_R[0] ** 2)
+            obj += 0.6 * cal_line2circle(x1, y1, x2, y2, O_X[0], O_Y[0], rad_cbf)**2
 
         # jackknife constraint
         opti.subject_to(fabs(x[3, t + 1] - x[2, t + 1]) <= np.deg2rad(JACKKNIFE_CON))
 
         # control barrier function (CBF)
-        lam = 1 # 0-0.25   # 0.1-0.5 infeasible 0.05 ok 1, 0.8 (-5 0 1)
+        # lam = 1  # 0-0.25   # 0.1-0.5 infeasible 0.05 ok 1, 0.8 (-5 0 1)
         for i in range(len(O_X)):
             print(abs(x0[0] - O_X[i]), abs(x0[1] - O_Y[i]))
-            print("comparison!", (x0[0] - O_X[i])**2 + (x0[1] - O_Y[i])**2, O_D[i])
+            print("comparison!", (x0[0] - O_X[i]) ** 2 + (x0[1] - O_Y[i]) ** 2, O_D[i])
 
-
-            if x0[1] - O_Y[i] > 0:
+            if x0[1] - O_Y[i] > -10:
                 print("CBF activated!!!!!!!!!!!!!!!!!!11")
-                if t != 0:
-                    opti.subject_to(
-                    (x[0, t + 1] - O_X[i]) * (x[0, t + 1] - O_X[i]) + (x[1, t + 1] - O_Y[i]) * (x[1, t + 1] - O_Y[i]) - O_R[i] ** 2 >=
-                    (1 - lam) * ((x[0, t] - O_X[i]) * (x[0, t] - O_X[i]) + (x[1, t] - O_Y[i]) * (x[1, t] - O_Y[i]) - O_R[i] ** 2))
+                print(x)
+                opti.subject_to(
+                    (x[0, t + 1] - O_X[i]) * (x[0, t + 1] - O_X[i]) + (x[1, t + 1] - O_Y[i]) * (x[1, t + 1] - O_Y[i]) -
+                    O_R[i] ** 2 >=
+                    (1 - lam) * (
+                            (x[0, t] - O_X[i]) * (x[0, t] - O_X[i]) + (x[1, t] - O_Y[i]) * (x[1, t] - O_Y[i]) - O_R[
+                        i] ** 2))
+
+                # opti.subject_to(
+                #     (x[0, t + 1] + cos(x[3, t + 1]) * ROD_LEN + cos(x[2, t + 1]) * CP_OFFSET - O_X[i]) * (
+                #                 x[0, t + 1] + cos(x[3, t + 1]) * ROD_LEN + cos(x[2, t + 1]) * CP_OFFSET - O_X[i]) + (
+                #                 x[1, t + 1] + sin(x[3, t + 1] * ROD_LEN) + sin(x[2, t + 1]) * CP_OFFSET - O_Y[i]) * (
+                #                 x[1, t + 1] + sin(x[3, t + 1] * ROD_LEN) + sin(x[2, t + 1]) * CP_OFFSET - O_Y[i]) - O_R[
+                #         i] ** 2 >= (1 - lam)**(t+1) * (
+                #                 (x[0, t] + cos(x[3, t]) * ROD_LEN + cos(x[2, t]) * CP_OFFSET - O_X[i]) * (
+                #                     x[0, t] + cos(x[3, t]) * ROD_LEN + cos(x[2, t]) * CP_OFFSET - O_X[i]) + (
+                #                             x[1, t] + sin(x[3, t] * ROD_LEN) + sin(x[2, t]) * CP_OFFSET - O_Y[i]) * (
+                #                             x[1, t] + sin(x[3, t] * ROD_LEN) + sin(x[2, t]) * CP_OFFSET - O_Y[i]) - O_R[
+                #                     i] ** 2))
                 # opti.subject_to(
                 #     fabs(x[0, t + 1] - O_X[i]) ** 3 + fabs(x[1, t + 1] - O_Y[i]) ** 3 - O_R[i] ** 3 >= (1 - lam) * (
                 #                 fabs(x[0, t] - O_X[i]) ** 3 + fabs(x[1, t] - O_Y[i]) ** 3 - O_R[i] ** 3))
@@ -481,6 +609,19 @@ def linear_mpc_control(xref, xbar, x0):
         # if t < (T - 1):
         #     opti.subject_to(fabs(u[1, t + 1] - u[1, t]) <= MAX_DSTEER * DT)
 
+    # if x0[1] - O_Y[i] > 0:
+    # outside the last barrier function constraint
+    # opti.subject_to((x1 - O_X[0]) * (x1 - O_X[0]) + (y1 - O_Y[0]) * (y1 - O_Y[0]) - O_R[0] ** 2 >= (1 - lam) * (
+    #             (x[0, T - 2] - O_X[i]) * (x[0, T - 2] - O_X[i]) + (x[1, T - 2] - O_Y[i]) * (x[1, T - 2] - O_Y[i]) -
+    #             O_R[i] ** 2))
+    # opti.subject_to((x11 - O_X[0]) * (x11 - O_X[0]) + (y11 - O_Y[0]) * (y11 - O_Y[0]) - O_R[0] ** 2 >= (1 - lam) * (
+    #         (x[0, T - 2] - O_X[i]) * (x[0, T - 2] - O_X[i]) + (x[1, T - 2] - O_Y[i]) * (x[1, T - 2] - O_Y[i]) -
+    #         O_R[i] ** 2))
+
+    # outside the hard constraints
+    # opti.subject_to((x1 - O_X[0]) * (x1 - O_X[0]) + (y1 - O_Y[0]) * (y1 - O_Y[0]) - O_R[0] ** 2 >= 0)
+    # opti.subject_to((x11 - O_X[0]) * (x11 - O_X[0]) + (y11 - O_Y[0]) * (y11 - O_Y[0]) - O_R[0] ** 2 >= 0)
+
     # initial pose constraint
     opti.subject_to(x[:, 0] == x0)
     # opti.subject_to(x[2, :] <= MAX_SPEED)
@@ -489,8 +630,10 @@ def linear_mpc_control(xref, xbar, x0):
     opti.subject_to(fabs(u[0, :]) <= MAX_SPEED)
     opti.subject_to(fabs(u[1, :]) <= MAX_OMEGA)
 
+    opti.minimize(obj)
+
     p_opts = dict(print_time=False, verbose=False)
-    s_opts = dict(print_level=0)
+    s_opts = dict(print_level=5) #, linear_solver='ma27')
     opti.solver("ipopt", p_opts, s_opts)
     # opti.solver("ipopt")  # set numerical backend
     sol = opti.solve()
@@ -503,88 +646,133 @@ def linear_mpc_control(xref, xbar, x0):
     oyawt = get_nparray_from_matrix(sol.value(x)[3, :])
     ov = get_nparray_from_matrix(sol.value(u)[0, :])
     odyaw = get_nparray_from_matrix(sol.value(u)[1, :])
+    BARRIER_LIST.clear()
     for j in range(len(O_X)):
         for i in range(1, len(ox)):
             print("solution: ", ox[i], oy[i], (ox[i] - O_X[j]) ** 2 + (oy[i] - O_Y[j]) ** 2 - O_R[j] ** 2,
-                  (ox[i] - O_X[j]) ** 2 + (oy[i] - O_Y[j]) ** 2 - O_R[j] ** 2 >= 0.1 * (
-                              (ox[i - 1] - O_X[j]) ** 2 + (oy[i - 1] - O_Y[j]) ** 2 - O_R[j] ** 2))
-        print("anti-jackknife: ", oyaw[0]-oyawt[0], x0[2]-x0[3], "limit: ", np.deg2rad(JACKKNIFE_CON))
-        O_D[j] = (x0[0] - O_X[j])**2 + (x0[1]- O_Y[j])**2
+                  (ox[i] - O_X[j]) ** 2 + (oy[i] - O_Y[j]) ** 2 - O_R[j] ** 2 >= 0.5 * (
+                          (ox[i - 1] - O_X[j]) ** 2 + (oy[i - 1] - O_Y[j]) ** 2 - O_R[j] ** 2))
+            BARRIER_LIST.append(0.5 * ((ox[i - 1] - O_X[j]) ** 2 + (oy[i - 1] - O_Y[j]) ** 2 - O_R[j] ** 2))
+        print("anti-jackknife: ", oyaw[0] - oyawt[0], x0[2] - x0[3], "limit: ", np.deg2rad(JACKKNIFE_CON))
+        O_D[j] = (x0[0] - O_X[j]) ** 2 + (x0[1] - O_Y[j]) ** 2
         # print("O_D!", O_D[i])
 
-#     x = cvxpy.Variable((NX, T + 1))
-#     u = cvxpy.Variable((NU, T))
-#
-#     cost = 0.0
-#     constraints = []
-#
-#     for t in range(T):
-#         # cost += cvxpy.quad_form(u[:, t], R)
-#
-#         if t != 0:
-#             cost += cvxpy.quad_form(xref[:, t] - x[:, t], Q)
-#             if t == T - 1:
-#                 cost += 5 * cvxpy.quad_form(xref[:, t] - x[:, t], Q)
-#
-#         A, B, C = get_linear_model_matrix(
-#             xref[:, t], xref[:, t+1], xbar[:, t])
-#         constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
-#
-#         # anti-jackknife
-#         constraints += [cvxpy.abs(x[3, t] - x[2, t]) <= np.deg2rad(JACKKNIFE_CON)]
-#
-#         # soft constraints for jackknife
-#         # cost += cvxpy.power(cvxpy.abs(x[3, t] + x[2, t]), 2)/100 # if cvxpy.abs(x[3, t] + x[2, t]) < JACKKNIFE_CON else 1000
-#
-#         # soft constraints for collision avoidance (potential field)
-#         # a = cvxpy.inv_pos(x[0, t]) + cvxpy.inv_pos(x[1, t])
-#         # cost += a
-#         constraints += [(cvxpy.norm(x[0, t + 1] + 4, 2) + cvxpy.norm(x[1, t + 1], 2) - 1) >= 0.5 * (cvxpy.norm(x[0, t] + 4, 2) + cvxpy.norm(x[1, t], 2) - 1)]
-#
-#
-#         if t < (T - 1):
-#             cost += cvxpy.quad_form(u[:, t + 1] - u[:, t], Rd)
-#         #     constraints += [cvxpy.abs(u[1, t + 1] - u[1, t]) <=
-#         #                     MAX_DSTEER * DT]
-#
-#     # cost += cvxpy.quad_form(xref[:, T] - x[:, T], Qf)
-#     # TODO: target pose penalty and input difference cost?
-#
-#     constraints += [x[:, 0] == x0]
-#     # constraints += [x[2, :] <= MAX_SPEED]
-#     # constraints += [x[2, :] >= MIN_SPEED]
-#     constraints += [cvxpy.abs(u[0, :]) <= MAX_SPEED]
-#     constraints += [cvxpy.abs(u[1, :]) <= MAX_OMEGA]
-#
-#     # get computational time
-#     st = time.time()
-#
-#     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
-#     prob.solve(solver=cvxpy.CVXOPT, verbose=False, method="dccp") # ECOS, CVXOPT
-#     # TODO: get license form MOSEK website, academic email address is necessary
-#
-#     elapsed_time = (time.time() - st) * 1000
-#     print('Execution time:', elapsed_time, 'milliseconds')
-#
-#     TIME_LIST.append(elapsed_time)
-#     print(len(TIME_LIST), " average computational time: ", sum(TIME_LIST) / len(TIME_LIST), 'milliseconds')
-#
-#     # print(cvxpy.installed_solvers())
-#
-#     print("The cost function value: ", prob.value, get_nparray_from_matrix(x.value[1, :]))
-#
-# #     if prob.status == cvxpy.OPTIMAL or prob.status == cvxpy.OPTIMAL_INACCURATE:
-#     if prob.status == "Converged":
-#         ox = get_nparray_from_matrix(x.value[0, :])
-#         oy = get_nparray_from_matrix(x.value[1, :])
-#         oyaw = get_nparray_from_matrix(x.value[2, :])
-#         oyawt = get_nparray_from_matrix(x.value[3, :])
-#         ov = get_nparray_from_matrix(u.value[0, :])
-#         odyaw = get_nparray_from_matrix(u.value[1, :])
-#
-#     else:
-#         print("Error: Cannot solve mpc..")
-#         ov, odyaw, ox, oy, oyaw, oyawt = None, None, None, None, None, None
+    x1 = ox[t_ref - 1]
+    y1 = oy[t_ref - 1]
+    yaw1 = oyaw[t_ref - 1]
+    yawt1 = oyawt[t_ref - 1]
+    x11 = ox[t_ref - 1]
+    y11 = oy[t_ref - 1]
+    yaw11 = oyaw[t_ref - 1]
+    yawt11 = oyawt[t_ref - 1]
+    for t1 in range(T - t_ref):
+        # x2 = x1 + MIN_SPEED * cos(yaw1 - yawt1) * cos(yawt1) * DT
+        # y2 = y1 + MIN_SPEED * cos(yaw1 - yawt1) * sin(yawt1) * DT
+        # yaw2 = yaw1
+        # yawt2 = yawt1 + MIN_SPEED / ROD_LEN * sin(yaw1 - yawt1) * DT
+        x2 = x1 + MIN_SPEED * cos(yaw1 - yawt1) * cos(yawt1) * DT
+        y2 = y1 + MIN_SPEED * cos(yaw1 - yawt1) * sin(yawt1) * DT
+        yaw2 = yaw1 + np.deg2rad(90) * DT
+        yawt2 = yawt1 + MIN_SPEED / ROD_LEN * sin(yaw1 - yawt1) * DT - CP_OFFSET * np.deg2rad(50) * cos(
+            yaw1 - yawt1) / ROD_LEN * DT
+        x1 = x2
+        y1 = y2
+        yaw1 = yaw2
+        yawt1 = yawt2
+        x2 = x11 + MIN_SPEED * cos(yaw11 - yawt11) * cos(yawt11) * DT
+        y2 = y11 + MIN_SPEED * cos(yaw11 - yawt11) * sin(yawt11) * DT
+        yaw2 = yaw11 - np.deg2rad(90) * DT
+        yawt2 = yawt11 + MIN_SPEED / ROD_LEN * sin(yaw11 - yawt11) * DT - CP_OFFSET * (-np.deg2rad(50)) * cos(
+            yaw11 - yawt11) / ROD_LEN * DT
+        x11 = x2
+        y11 = y2
+        yaw11 = yaw2
+        yawt11 = yawt2
+
+    X_SET.clear()
+    Y_SET.clear()
+    X_SET.append(x1)
+    X_SET.append(x11)
+    X_SET.append(ox[t_ref - 1])
+    X_SET.append(ox[-1])
+    Y_SET.append(y1)
+    Y_SET.append(y11)
+    Y_SET.append(oy[t_ref - 1])
+    Y_SET.append(oy[-1])
+
+    #     x = cvxpy.Variable((NX, T + 1))
+    #     u = cvxpy.Variable((NU, T))
+    #
+    #     cost = 0.0
+    #     constraints = []
+    #
+    #     for t in range(T):
+    #         # cost += cvxpy.quad_form(u[:, t], R)
+    #
+    #         if t != 0:
+    #             cost += cvxpy.quad_form(xref[:, t] - x[:, t], Q)
+    #             if t == T - 1:
+    #                 cost += 5 * cvxpy.quad_form(xref[:, t] - x[:, t], Q)
+    #
+    #         A, B, C = get_linear_model_matrix(
+    #             xref[:, t], xref[:, t+1], xbar[:, t])
+    #         constraints += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C]
+    #
+    #         # anti-jackknife
+    #         constraints += [cvxpy.abs(x[3, t] - x[2, t]) <= np.deg2rad(JACKKNIFE_CON)]
+    #
+    #         # soft constraints for jackknife
+    #         # cost += cvxpy.power(cvxpy.abs(x[3, t] + x[2, t]), 2)/100 # if cvxpy.abs(x[3, t] + x[2, t]) < JACKKNIFE_CON else 1000
+    #
+    #         # soft constraints for collision avoidance (potential field)
+    #         # a = cvxpy.inv_pos(x[0, t]) + cvxpy.inv_pos(x[1, t])
+    #         # cost += a
+    #         constraints += [(cvxpy.norm(x[0, t + 1] + 4, 2) + cvxpy.norm(x[1, t + 1], 2) - 1) >= 0.5 * (cvxpy.norm(x[0, t] + 4, 2) + cvxpy.norm(x[1, t], 2) - 1)]
+    #
+    #
+    #         if t < (T - 1):
+    #             cost += cvxpy.quad_form(u[:, t + 1] - u[:, t], Rd)
+    #         #     constraints += [cvxpy.abs(u[1, t + 1] - u[1, t]) <=
+    #         #                     MAX_DSTEER * DT]
+    #
+    #     # cost += cvxpy.quad_form(xref[:, T] - x[:, T], Qf)
+    #     # TODO: target pose penalty and input difference cost?
+    #
+    #     constraints += [x[:, 0] == x0]
+    #     # constraints += [x[2, :] <= MAX_SPEED]
+    #     # constraints += [x[2, :] >= MIN_SPEED]
+    #     constraints += [cvxpy.abs(u[0, :]) <= MAX_SPEED]
+    #     constraints += [cvxpy.abs(u[1, :]) <= MAX_OMEGA]
+    #
+    #     # get computational time
+    #     st = time.time()
+    #
+    #     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
+    #     prob.solve(solver=cvxpy.CVXOPT, verbose=False, method="dccp") # ECOS, CVXOPT
+    #     # TODO: get license form MOSEK website, academic email address is necessary
+    #
+    #     elapsed_time = (time.time() - st) * 1000
+    #     print('Execution time:', elapsed_time, 'milliseconds')
+    #
+    #     TIME_LIST.append(elapsed_time)
+    #     print(len(TIME_LIST), " average computational time: ", sum(TIME_LIST) / len(TIME_LIST), 'milliseconds')
+    #
+    #     # print(cvxpy.installed_solvers())
+    #
+    #     print("The cost function value: ", prob.value, get_nparray_from_matrix(x.value[1, :]))
+    #
+    # #     if prob.status == cvxpy.OPTIMAL or prob.status == cvxpy.OPTIMAL_INACCURATE:
+    #     if prob.status == "Converged":
+    #         ox = get_nparray_from_matrix(x.value[0, :])
+    #         oy = get_nparray_from_matrix(x.value[1, :])
+    #         oyaw = get_nparray_from_matrix(x.value[2, :])
+    #         oyawt = get_nparray_from_matrix(x.value[3, :])
+    #         ov = get_nparray_from_matrix(u.value[0, :])
+    #         odyaw = get_nparray_from_matrix(u.value[1, :])
+    #
+    #     else:
+    #         print("Error: Cannot solve mpc..")
+    #         ov, odyaw, ox, oy, oyaw, oyawt = None, None, None, None, None, None
 
     return ov, odyaw, ox, oy, oyaw, oyawt
 
@@ -602,8 +790,8 @@ def calc_ref_trajectory(state, cx, cy, cyaw, cyawt, ck, sp, dl, pind):
     xref[0, 0] = cx[ind]
     xref[1, 0] = cy[ind]
     # xref[2, 0] = sp[ind]
-    #TODO: if the pose of tractor could be calculate in this case, when yes, define the function cal_tractor_pose
-    xref[2, 0] = cyaw[ind] # cal_tractor_pose(cyawt[ind])
+    # TODO: if the pose of tractor could be calculate in this case, when yes, define the function cal_tractor_pose
+    xref[2, 0] = cyaw[ind]  # cal_tractor_pose(cyawt[ind])
     xref[3, 0] = cyawt[ind]
 
     for i in range(T + 1):
@@ -618,14 +806,13 @@ def calc_ref_trajectory(state, cx, cy, cyaw, cyawt, ck, sp, dl, pind):
             xref[1, i] = cy[ncourse - 1]
             # xref[2, i] = sp[ncourse - 1]
             # TODO: traget yaw position should be pre-defined!!!
-            xref[2, i] = cyaw[ncourse - 1] # cal_tractor_pose(cyawt[ncourse - 1])
+            xref[2, i] = cyaw[ncourse - 1]  # cal_tractor_pose(cyawt[ncourse - 1])
             xref[3, i] = cyawt[ncourse - 1]
 
     return xref, ind
 
 
 def check_goal(state, goal, tind, nind):
-
     # check goal
     dx = state.x - goal[0]
     dy = state.y - goal[1]
@@ -687,7 +874,7 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
 
     ov, odyaw = None, None
 
-    #TODO: check the function smooth_yaw
+    # TODO: check the function smooth_yaw
     cyawt = smooth_yaw(cyawt)
 
     while MAX_TIME >= time:
@@ -703,7 +890,8 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
         ov, odyaw, ox, oy, oyaw, oyawt = iterative_linear_mpc_control(
             xref, x0, ov, odyaw)
 
-        print("xO", x0, "x ref: ", xref[0, :], "state: ", ox, "y ref: ", xref[1, :],"state: ", oy, oyaw, oyawt, "input: ", ov, odyaw)
+        print("xO", x0, "x ref: ", xref[0, :], "state: ", ox, "y ref: ", xref[1, :], "state: ", oy, oyaw, oyawt,
+              "input: ", ov, odyaw)
         if abs(ov[0]) <= 0.0001:
             print("WARNING!!!!!!", ov[0])
 
@@ -762,7 +950,7 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
             plt.cla()
             # for stopping simulation with the esc key.
             plt.gcf().canvas.mpl_connect('key_release_event',
-                    lambda event: [exit(0) if event.key == 'escape' else None])
+                                         lambda event: [exit(0) if event.key == 'escape' else None])
             if ox is not None:
                 plt.plot(ox, oy, "xr", label="MPC")
             plt.plot(cx, cy, "-r", label="course")
@@ -773,11 +961,19 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
             plot_car(state.x, state.y, state.yawt, LENGTH_T)
 
             # for tractor
-            plot_car(state.x + np.cos(state.yawt) * ROD_LEN + np.cos(state.yaw) * CP_OFFSET, state.y + np.sin(state.yawt) * ROD_LEN + np.sin(state.yaw) * CP_OFFSET, state.yaw, LENGTH)
+            plot_car(state.x + np.cos(state.yawt) * ROD_LEN + np.cos(state.yaw) * CP_OFFSET,
+                     state.y + np.sin(state.yawt) * ROD_LEN + np.sin(state.yaw) * CP_OFFSET, state.yaw, LENGTH)
             txt_list.append(state.x + np.cos(state.yawt) * ROD_LEN)
             tyt_list.append(state.y + np.sin(state.yawt) * ROD_LEN)
 
-            plt.plot(PX_SET,PY_SET, "or", label='reachability')
+            # reachable set
+            plt.plot(X_SET, Y_SET, "or", label='reachability')
+            # plt.plot(PX_SET, PY_SET, "or", label='reachability')
+            # for i in range(len(BARRIER_LIST)):
+            #     theta = np.linspace(0, 2 * np.pi, 100)
+            #     circle_x = O_X[0] + (sqrt(BARRIER_LIST[i])+O_R[0]) * np.cos(theta)
+            #     circle_y = O_Y[0] + (sqrt(BARRIER_LIST[i])+O_R[0]) * np.sin(theta)
+            #     plt.plot(circle_x, circle_y)
 
             for i in range(len(O_X)):
                 print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", (state.x - O_X[i]) ** 2 + (state.y - O_Y[i]) ** 2 - O_R[i] ** 2)
@@ -801,6 +997,7 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
     return t, x, y, yaw, yawt, dyaw, v, txt_list, tyt_list, diff_tar_act
 
     # return t, x, y, yaw, v, dyaw, v, txm_list, tym_list, txt_list, tyt_list
+
 
 # def cal_trailer_pose(tractor_state, phi_tractrix, phi_model, dyaw):
 #     phi_model += - tractor_state.v * np.sin(phi_model) / 3 - dyaw
@@ -842,8 +1039,6 @@ def do_simulation(cx, cy, cyaw, cyawt, ck, sp, dl, initial_state):
 #     return txm, tym, tyawm, txt, tyt, tyawt
 
 
-
-
 def calc_speed_profile(cx, cy, cyaw, target_speed):
     # Clculate the moving direction of each time step
 
@@ -877,7 +1072,6 @@ def calc_speed_profile(cx, cy, cyaw, target_speed):
 
 
 def smooth_yaw(yaw):
-
     for i in range(len(yaw) - 1):
         dyaw = yaw[i + 1] - yaw[i]
 
@@ -894,7 +1088,7 @@ def smooth_yaw(yaw):
 
 def get_straight_course(dl):
     ax = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    ay = [0.0, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
+    ay = [0.0, -2.0, -4.0, -6.0, -8.0, -10.0, -12.0]
     cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
         ax, ay, ds=dl)
 
@@ -947,6 +1141,7 @@ def get_switch_back_course(dl):
 
     return cx, cy, cyaw, ck
 
+
 def get_reverse_parking_course(dl):
     # ax = [0.0, -5.0, -10.0, -20.0, -30.0, -30.0, -30.0]
     # ay = [0.0, 0.0, 0.0, 0.0, -10.0, -20.0, -30.0]
@@ -961,17 +1156,18 @@ def get_reverse_parking_course(dl):
 
 
 def get_circle_course_forward(r):
-    t = np.linspace(0, 2*math.pi, num=200)
-    ax = [r*math.sin(i) for i in t]
-    ay = [r*math.cos(i) for i in t]
+    t = np.linspace(0, 2 * math.pi, num=200)
+    ax = [r * math.sin(i) for i in t]
+    ay = [r * math.cos(i) for i in t]
     ck = np.zeros(200)
 
     return ax, ay, -t, ck
 
+
 def get_circle_course_backward(r):
-    t = np.linspace(0, 2*math.pi, num=200)
-    ax = [- r*math.sin(i) for i in t]
-    ay = [r*math.cos(i) for i in t]
+    t = np.linspace(0, 2 * math.pi, num=200)
+    ax = [- r * math.sin(i) for i in t]
+    ay = [r * math.cos(i) for i in t]
     ck = np.zeros(200)
 
     return ax, ay, t, ck
@@ -991,8 +1187,8 @@ def main():
     # cyawt = [abs(i) for i in cyawt]
     # cx, cy, cyawt, ck = get_switch_back_course(dl)
     # cx, cy, cyawt, ck = get_circle_course_forward(CIR_RAD)
-    cx, cy, cyawt, ck = get_circle_course_backward(CIR_RAD)
-    # cx, cy, cyawt, ck = get_reverse_parking_course(dl)
+    # cx, cy, cyawt, ck = get_circle_course_backward(CIR_RAD)
+    cx, cy, cyawt, ck = get_reverse_parking_course(dl)
     # print(cyawt)
 
     sp = calc_speed_profile(cx, cy, cyawt, TARGET_SPEED)
@@ -1038,13 +1234,12 @@ def main():
         t = np.linspace(0, diff.shape[0], num=diff.shape[0])
         plt.plot(t, diff.T[0], "-g", label="x_axis")
         plt.plot(t, diff.T[1], "-b", label="y_axis")
-        plt.plot(t, [math.sqrt(i[0]**2 + i[1]**2) for i in diff], "-r", label="distance")
+        plt.plot(t, [math.sqrt(i[0] ** 2 + i[1] ** 2) for i in diff], "-r", label="distance")
         plt.grid(True)
         plt.xlabel("Time [s]")
         plt.ylabel("difference [m]")
 
         plt.show()
-
 
 
 def main2():
